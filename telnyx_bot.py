@@ -155,22 +155,7 @@ def build_tools_from_webhooks(webhooks):
         tool_url_map[tool_name] = wh['url']
         logger.info(f"  Registered tool: {tool_name} → {wh['url']}")
 
-    # Always add built-in end_call tool
-    tools.append({
-        'type': 'function',
-        'name': 'end_call',
-        'description': 'End the phone call. ONLY use this after you have completely finished speaking your goodbye message and the conversation is fully concluded.',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'reason': {
-                    'type': 'string',
-                    'description': 'Why the call is ending (e.g. "conversation_complete", "caller_requested", "all_tasks_done")',
-                },
-            },
-        },
-    })
-    logger.info(f"  Registered built-in tool: end_call")
+    logger.info(f"  Built {len(tools)} webhook tools")
 
     return tools, tool_url_map
 
@@ -304,8 +289,10 @@ async def websocket_endpoint(websocket: WebSocket):
             "After the greeting, be friendly, helpful, and professional. "
             "You handle inquiries about solar panel installation, electrical services, "
             "and booking appointments. Always respond in English. "
-            "When ending a call, say your COMPLETE goodbye message first, "
-            "then wait a moment before calling end_call."
+            "When the conversation is wrapping up, ALWAYS end by saying: "
+            "'Have a wonderful day, take care!' "
+            "This is your sign-off phrase. Say it naturally and warmly, then stop talking. "
+            "The caller will hang up after hearing your goodbye."
         )
         llm_kwargs = {
             'api_key': os.getenv("OPENAI_API_KEY"),
@@ -313,9 +300,10 @@ async def websocket_endpoint(websocket: WebSocket):
             'instructions': system_prompt,
         }
 
-        # Add tools — always have at least end_call
-        llm_kwargs['tools'] = tools
-        logger.info(f"Registered {len(tools)} function-calling tools (including end_call)")
+        # Add webhook tools (if any)
+        if tools:
+            llm_kwargs['tools'] = tools
+        logger.info(f"Registered {len(tools)} function-calling tools")
 
         # OpenAI Realtime LLM
         llm = OpenAIRealtimeLLMService(**llm_kwargs)
@@ -325,15 +313,6 @@ async def websocket_endpoint(websocket: WebSocket):
         async def on_function_call(llm_service, function_name, arguments, call_id):
             """Called when the AI invokes a function-calling tool."""
             logger.info(f"Function call: {function_name}({json.dumps(arguments)}) call_id={call_id}")
-
-            # ── Built-in: end_call ──────────────────
-            if function_name == 'end_call':
-                reason = arguments.get('reason', 'conversation_complete')
-                logger.info(f"End call requested: {reason}")
-                # Wait 4s for goodbye audio to finish playing, then end pipeline
-                await asyncio.sleep(4.0)
-                await task.queue_frames([EndFrame()])
-                return json.dumps({'success': True, 'message': 'Call ended gracefully'})
 
             # ── Webhook tools ──────────────────────
             webhook_url = tool_url_map.get(function_name)
