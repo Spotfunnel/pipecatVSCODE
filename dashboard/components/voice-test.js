@@ -11,7 +11,6 @@ export function renderVoiceTest(systemPrompt) {
     let audioEl = null;    // Remote audio playback
     let localStream = null;
     let isActive = false;
-    let transcriptLines = [];
 
     el.innerHTML = `
     <p class="voice-tester-text">Test your agent's voice and personality in real-time</p>
@@ -35,11 +34,17 @@ export function renderVoiceTest(systemPrompt) {
 
         btn.addEventListener('click', async () => {
             if (isActive) {
-                stopSession();
+                cleanup();
+                setStatus('Test ended. Click to start again.', 'var(--text-tertiary)');
             } else {
                 await startSession();
             }
         });
+
+        function setStatus(text, color) {
+            status.textContent = text;
+            status.style.color = color || 'var(--text-tertiary)';
+        }
 
         function appendTranscript(role, text) {
             const line = document.createElement('div');
@@ -50,13 +55,31 @@ export function renderVoiceTest(systemPrompt) {
             transcriptDiv.style.display = 'block';
         }
 
+        function cleanup() {
+            isActive = false;
+            if (dc) { try { dc.close(); } catch { } dc = null; }
+            if (pc) { try { pc.close(); } catch { } pc = null; }
+            if (localStream) {
+                localStream.getTracks().forEach(t => t.stop());
+                localStream = null;
+            }
+            if (audioEl) {
+                audioEl.srcObject = null;
+                audioEl = null;
+            }
+            btn.classList.remove('recording');
+            btn.textContent = '🎙️';
+            btn.disabled = false;
+            viz.classList.remove('active');
+        }
+
         async function startSession() {
             try {
-                status.textContent = 'Connecting to OpenAI Realtime...';
-                status.style.color = 'var(--accent-cyan)';
+                setStatus('🔄 Connecting to OpenAI Realtime...', 'var(--accent-cyan)');
                 btn.disabled = true;
 
-                // 1. Get ephemeral token from our backend proxy
+                // 1. Get ephemeral token
+                setStatus('🔑 Getting session token...', 'var(--accent-cyan)');
                 const tokenResp = await fetch('/api/realtime/token', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -69,34 +92,61 @@ export function renderVoiceTest(systemPrompt) {
 
                 const tokenData = await tokenResp.json();
                 if (!tokenResp.ok) {
-                    throw new Error(tokenData.error || 'Failed to get token');
+                    throw new Error(tokenData.error || `Token request failed (${tokenResp.status})`);
                 }
 
                 const ephemeralKey = tokenData.token;
+                if (!ephemeralKey) {
+                    throw new Error('No ephemeral token received');
+                }
+                console.log('[VoiceTest] Token received:', ephemeralKey.substring(0, 10) + '...');
 
-                // 2. Create RTCPeerConnection
+                // 2. Get microphone permission first (user gesture required)
+                setStatus('🎤 Requesting microphone access...', 'var(--accent-cyan)');
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                } catch (micErr) {
+                    throw new Error('Microphone access denied. Please allow microphone access and try again.');
+                }
+                console.log('[VoiceTest] Microphone acquired');
+
+                // 3. Create RTCPeerConnection
                 pc = new RTCPeerConnection();
 
-                // 3. Set up remote audio playback (AI voice output)
+                // Monitor connection state
+                pc.onconnectionstatechange = () => {
+                    console.log('[VoiceTest] Connection state:', pc.connectionState);
+                    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                        appendTranscript('agent', '⚠️ Connection lost');
+                        cleanup();
+                        setStatus('❌ Connection lost. Click to reconnect.', 'var(--accent-rose)');
+                    }
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                    console.log('[VoiceTest] ICE state:', pc.iceConnectionState);
+                };
+
+                // 4. Set up remote audio playback (AI voice output)
                 audioEl = document.createElement('audio');
                 audioEl.autoplay = true;
+                document.body.appendChild(audioEl); // Must be in DOM for some browsers
                 pc.ontrack = (e) => {
+                    console.log('[VoiceTest] Got remote audio track');
                     audioEl.srcObject = e.streams[0];
                 };
 
-                // 4. Get microphone and add local audio track
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // 5. Add local audio track
                 pc.addTrack(localStream.getTracks()[0]);
 
-                // 5. Create data channel for events
+                // 6. Create data channel for events
                 dc = pc.createDataChannel('oai-events');
 
                 let currentAssistantText = '';
-                let currentUserText = '';
 
                 dc.onopen = () => {
-                    console.log('[VoiceTest] Data channel open');
-                    // Send session update with instructions
+                    console.log('[VoiceTest] Data channel open — session active');
+                    // Send session config with instructions
                     dc.send(JSON.stringify({
                         type: 'session.update',
                         session: {
@@ -113,11 +163,35 @@ export function renderVoiceTest(systemPrompt) {
                     }));
                 };
 
+                dc.onclose = () => {
+                    console.log('[VoiceTest] Data channel closed');
+                    if (isActive) {
+                        cleanup();
+                        setStatus('⚠️ Session ended by server. Click to restart.', 'var(--accent-rose)');
+                    }
+                };
+
+                dc.onerror = (e) => {
+                    console.error('[VoiceTest] Data channel error:', e);
+                };
+
                 dc.onmessage = (e) => {
                     try {
                         const event = JSON.parse(e.data);
+                        // Log all events for debugging
+                        if (event.type !== 'response.audio.delta') {
+                            console.log('[VoiceTest] Event:', event.type);
+                        }
 
                         switch (event.type) {
+                            case 'session.created':
+                                console.log('[VoiceTest] Session created:', event.session?.id);
+                                break;
+
+                            case 'session.updated':
+                                console.log('[VoiceTest] Session updated');
+                                break;
+
                             case 'response.audio_transcript.delta':
                                 currentAssistantText += event.delta || '';
                                 break;
@@ -136,28 +210,24 @@ export function renderVoiceTest(systemPrompt) {
                                 break;
 
                             case 'input_audio_buffer.speech_started':
-                                status.textContent = '🔴 Listening...';
-                                status.style.color = 'var(--accent-rose)';
+                                setStatus('🔴 Listening...', 'var(--accent-rose)');
                                 break;
 
                             case 'input_audio_buffer.speech_stopped':
-                                status.textContent = '🤔 Thinking...';
-                                status.style.color = 'var(--accent-cyan)';
+                                setStatus('🤔 Thinking...', 'var(--accent-cyan)');
                                 break;
 
                             case 'response.audio.delta':
-                                status.textContent = '🔊 Agent speaking...';
-                                status.style.color = 'var(--accent-purple)';
+                                setStatus('🔊 Agent speaking...', 'var(--accent-purple)');
                                 break;
 
                             case 'response.done':
-                                status.textContent = '🎙️ Your turn — speak to your agent';
-                                status.style.color = 'var(--accent-green)';
+                                setStatus('🎙️ Your turn — speak to your agent', 'var(--accent-green)');
                                 break;
 
                             case 'error':
                                 console.error('[VoiceTest] API error:', event.error);
-                                appendTranscript('agent', `⚠️ Error: ${event.error?.message || 'Unknown error'}`);
+                                appendTranscript('agent', `⚠️ Error: ${event.error?.message || JSON.stringify(event.error)}`);
                                 break;
                         }
                     } catch (err) {
@@ -165,9 +235,11 @@ export function renderVoiceTest(systemPrompt) {
                     }
                 };
 
-                // 6. SDP offer/answer exchange
+                // 7. SDP offer/answer exchange
+                setStatus('📡 Establishing WebRTC connection...', 'var(--accent-cyan)');
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
+                console.log('[VoiceTest] SDP offer created');
 
                 const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
                     method: 'POST',
@@ -179,11 +251,16 @@ export function renderVoiceTest(systemPrompt) {
                 });
 
                 if (!sdpResp.ok) {
-                    throw new Error(`SDP exchange failed: ${sdpResp.status}`);
+                    const errText = await sdpResp.text();
+                    console.error('[VoiceTest] SDP response error:', sdpResp.status, errText);
+                    throw new Error(`WebRTC setup failed (${sdpResp.status}): ${errText.substring(0, 200)}`);
                 }
 
                 const answerSdp = await sdpResp.text();
+                console.log('[VoiceTest] SDP answer received, length:', answerSdp.length);
+
                 await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+                console.log('[VoiceTest] Remote description set — connection establishing');
 
                 // Connected!
                 isActive = true;
@@ -191,40 +268,16 @@ export function renderVoiceTest(systemPrompt) {
                 btn.classList.add('recording');
                 btn.textContent = '⏹️';
                 viz.classList.add('active');
-                status.textContent = '🎙️ Connected — speak to your agent';
-                status.style.color = 'var(--accent-green)';
+                setStatus('🎙️ Connected — speak to your agent', 'var(--accent-green)');
                 transcriptScroll.innerHTML = '';
                 transcriptDiv.style.display = 'block';
 
             } catch (err) {
                 console.error('[VoiceTest] Connection error:', err);
-                btn.disabled = false;
-                status.textContent = `❌ ${err.message}`;
-                status.style.color = 'var(--accent-rose)';
-                stopSession();
+                cleanup();
+                // Show error AFTER cleanup (don't let cleanup overwrite it)
+                setStatus(`❌ ${err.message}`, 'var(--accent-rose)');
             }
-        }
-
-        function stopSession() {
-            isActive = false;
-
-            if (dc) { try { dc.close(); } catch { } dc = null; }
-            if (pc) { try { pc.close(); } catch { } pc = null; }
-            if (localStream) {
-                localStream.getTracks().forEach(t => t.stop());
-                localStream = null;
-            }
-            if (audioEl) {
-                audioEl.srcObject = null;
-                audioEl = null;
-            }
-
-            btn.classList.remove('recording');
-            btn.textContent = '🎙️';
-            btn.disabled = false;
-            viz.classList.remove('active');
-            status.textContent = 'Test ended. Click to start again.';
-            status.style.color = 'var(--text-tertiary)';
         }
     });
 

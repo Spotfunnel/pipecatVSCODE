@@ -54,18 +54,23 @@ export default defineConfig({
                             });
                         });
 
+                        const reqBody = {
+                            model: body.model || 'gpt-4o-realtime-preview',
+                            modalities: ['audio', 'text'],
+                            voice: body.voice || 'ash',
+                            instructions: body.instructions || 'You are a helpful assistant.',
+                            input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
+                        };
+
+                        console.log('[Token Proxy] Creating session with model:', reqBody.model);
+
                         const tokenResp = await fetch('https://api.openai.com/v1/realtime/sessions', {
                             method: 'POST',
                             headers: {
                                 'Authorization': `Bearer ${apiKey}`,
                                 'Content-Type': 'application/json',
                             },
-                            body: JSON.stringify({
-                                model: body.model || 'gpt-4o-realtime-preview',
-                                voice: body.voice || 'ash',
-                                instructions: body.instructions || 'You are a helpful assistant.',
-                                input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
-                            }),
+                            body: JSON.stringify(reqBody),
                         });
 
                         const result = await tokenResp.json();
