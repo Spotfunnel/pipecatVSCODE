@@ -294,10 +294,22 @@ async def websocket_endpoint(websocket: WebSocket):
         tools, tool_url_map = build_tools_from_webhooks(webhooks)
 
         # Build LLM config
+        system_prompt = (
+            "You are Grace, a virtual assistant for Trentham Solar & Electrical. "
+            "You MUST begin every call by saying EXACTLY: "
+            "'Grace speaking. Trentham Solar & Electrical is unavailable at the moment, "
+            "but I'm their virtual assistant. How can I help you today?' "
+            "Do NOT improvise or change this greeting. Do NOT say 'G'day' or any other opening. "
+            "After the greeting, be friendly, helpful, and professional. "
+            "You handle inquiries about solar panel installation, electrical services, "
+            "and booking appointments. Always respond in English. "
+            "When ending a call, say your COMPLETE goodbye message first, "
+            "then wait a moment before calling end_call."
+        )
         llm_kwargs = {
             'api_key': os.getenv("OPENAI_API_KEY"),
             'model': "gpt-realtime",
-            'instructions': "You are a helpful and friendly AI assistant talking over the phone. Always respond in English.",
+            'instructions': system_prompt,
         }
 
         # Add tools — always have at least end_call
@@ -317,8 +329,8 @@ async def websocket_endpoint(websocket: WebSocket):
             if function_name == 'end_call':
                 reason = arguments.get('reason', 'conversation_complete')
                 logger.info(f"End call requested: {reason}")
-                # Wait 2s for goodbye audio to finish, then end pipeline
-                await asyncio.sleep(2.0)
+                # Wait 4s for goodbye audio to finish playing, then end pipeline
+                await asyncio.sleep(4.0)
                 await task.queue_frames([EndFrame()])
                 return json.dumps({'success': True, 'message': 'Call ended gracefully'})
 
@@ -337,7 +349,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 return json.dumps({"success": False, "error": f"No webhook configured for {function_name}"})
 
         context = LLMContext([
-            {"role": "system", "content": "You are a helpful and friendly AI assistant talking over the phone. Always respond in English."}
+            {"role": "system", "content": system_prompt}
         ])
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
@@ -354,8 +366,8 @@ async def websocket_endpoint(websocket: WebSocket):
             pipeline,
             params=PipelineParams(
                 enable_metrics=True,
-                audio_in_sample_rate=16000,
-                audio_out_sample_rate=24000,
+                audio_in_sample_rate=8000,
+                audio_out_sample_rate=8000,
                 allow_interruptions=True,
             )
         )
