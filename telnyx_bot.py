@@ -1,7 +1,9 @@
 import asyncio
 import os
 import sys
+import json
 import logging
+import aiohttp
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse
 from uvicorn import Config, Server
@@ -28,6 +30,122 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv(override=True)
+
+# ── Webhook Configuration ────────────────────────────────────────────────────
+# Load webhook config from webhooks.json (exported from dashboard)
+# If the file doesn't exist, no webhooks will be registered
+WEBHOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'webhooks.json')
+
+
+def load_webhooks():
+    """Load webhook configuration from webhooks.json."""
+    try:
+        with open(WEBHOOKS_FILE, 'r') as f:
+            webhooks = json.load(f)
+            logger.info(f"Loaded {len(webhooks)} webhooks from {WEBHOOKS_FILE}")
+            return webhooks
+    except FileNotFoundError:
+        logger.info(f"No webhooks.json found at {WEBHOOKS_FILE} — no webhooks configured")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in {WEBHOOKS_FILE}: {e}")
+        return []
+
+
+def build_tools_from_webhooks(webhooks):
+    """Build OpenAI function-calling tools from webhook config.
+    
+    Returns (tools_list, tool_url_map) where tool_url_map maps tool names to webhook URLs.
+    """
+    tools = []
+    tool_url_map = {}
+
+    for wh in webhooks:
+        if wh.get('trigger') != 'on_tool_call' or not wh.get('name') or not wh.get('url'):
+            continue
+
+        # Sanitize name for function calling (alphanumeric + underscores only)
+        import re
+        tool_name = re.sub(r'[^a-z0-9_]', '_', wh['name'].lower())
+        tool_name = re.sub(r'_+', '_', tool_name).strip('_') or 'webhook_action'
+
+        # Build parameters schema from payload fields
+        properties = {}
+        field_descriptions = {
+            'caller_number': 'The caller phone number',
+            'transcript': 'Full conversation transcript',
+            'call_duration': 'Duration of the call in seconds',
+            'summary': 'Brief summary of the conversation and outcome',
+            'address': 'Customer address (street, suburb, state, postcode)',
+            'installer_message': 'Detailed message for the installer with special instructions, access notes, and job specifics',
+            'custom_data': 'Any additional custom data',
+            'extracted_fields': 'Extracted information like name, email, service type',
+            'agent_name': 'Name of the AI agent',
+            'timestamp': 'ISO timestamp of when this was triggered',
+        }
+
+        for field in wh.get('payloadFields', []):
+            if field == 'address':
+                properties[field] = {
+                    'type': 'object',
+                    'description': field_descriptions.get(field, field),
+                    'properties': {
+                        'street': {'type': 'string'},
+                        'suburb': {'type': 'string'},
+                        'state': {'type': 'string'},
+                        'postcode': {'type': 'string'},
+                    },
+                }
+            elif field in ('extracted_fields', 'custom_data'):
+                properties[field] = {
+                    'type': 'object',
+                    'description': field_descriptions.get(field, field),
+                }
+            elif field == 'call_duration':
+                properties[field] = {
+                    'type': 'number',
+                    'description': field_descriptions.get(field, field),
+                }
+            else:
+                properties[field] = {
+                    'type': 'string',
+                    'description': field_descriptions.get(field, field),
+                }
+
+        tool = {
+            'type': 'function',
+            'name': tool_name,
+            'description': f'Trigger the "{wh["name"]}" webhook. Use this when the caller\'s request matches this action.',
+            'parameters': {
+                'type': 'object',
+                'properties': properties,
+            },
+        }
+
+        tools.append(tool)
+        tool_url_map[tool_name] = wh['url']
+        logger.info(f"  Registered tool: {tool_name} → {wh['url']}")
+
+    return tools, tool_url_map
+
+
+async def fire_webhook(url, payload):
+    """Fire a webhook by POSTing payload to the URL."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                status = resp.status
+                body = await resp.text()
+                logger.info(f"Webhook fired to {url} → HTTP {status}")
+                return {
+                    'success': 200 <= status < 300,
+                    'status': status,
+                    'response': body[:500],
+                }
+    except Exception as e:
+        logger.error(f"Webhook error for {url}: {e}")
+        return {'success': False, 'error': str(e)}
+
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -125,12 +243,46 @@ async def websocket_endpoint(websocket: WebSocket):
             )
         )
 
-        # OpenAI Realtime LLM — bare config that was working
-        llm = OpenAIRealtimeLLMService(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-realtime",
-            instructions="You are a helpful and friendly AI assistant talking over the phone. Always respond in English.",
-        )
+        # ── Load webhook config & build tools ───────────────────
+        webhooks = load_webhooks()
+        tools, tool_url_map = build_tools_from_webhooks(webhooks)
+
+        # Build LLM config
+        llm_kwargs = {
+            'api_key': os.getenv("OPENAI_API_KEY"),
+            'model': "gpt-realtime",
+            'instructions': "You are a helpful and friendly AI assistant talking over the phone. Always respond in English.",
+        }
+
+        # Add tools if any webhooks are configured
+        if tools:
+            llm_kwargs['tools'] = tools
+            logger.info(f"Registered {len(tools)} function-calling tools")
+
+        # OpenAI Realtime LLM
+        llm = OpenAIRealtimeLLMService(**llm_kwargs)
+
+        # ── Handle function calls from the AI ────────────────────
+        @llm.event_handler("on_function_call")
+        async def on_function_call(llm_service, function_name, arguments, call_id):
+            """Called when the AI invokes a function-calling tool.
+            
+            We fire the corresponding webhook and return the result to the AI.
+            """
+            logger.info(f"Function call: {function_name}({json.dumps(arguments)}) call_id={call_id}")
+
+            webhook_url = tool_url_map.get(function_name)
+            if webhook_url:
+                result = await fire_webhook(webhook_url, arguments)
+                if result['success']:
+                    logger.info(f"Webhook {function_name} succeeded: HTTP {result['status']}")
+                    return json.dumps({"success": True, "message": "Webhook delivered successfully"})
+                else:
+                    logger.warning(f"Webhook {function_name} failed: {result.get('error', result.get('status'))}")
+                    return json.dumps({"success": False, "error": result.get('error', f"HTTP {result.get('status')}")})
+            else:
+                logger.warning(f"No webhook URL for function: {function_name}")
+                return json.dumps({"success": False, "error": f"No webhook configured for {function_name}"})
 
         context = LLMContext([
             {"role": "system", "content": "You are a helpful and friendly AI assistant talking over the phone. Always respond in English."}

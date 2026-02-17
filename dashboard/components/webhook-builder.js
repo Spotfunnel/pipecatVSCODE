@@ -11,6 +11,9 @@ const PAYLOAD_FIELDS = [
     'caller_number',
     'transcript',
     'call_duration',
+    'summary',
+    'address',
+    'installer_message',
     'custom_data',
     'extracted_fields',
     'agent_name',
@@ -27,7 +30,7 @@ function createEmptyWebhook() {
         name: '',
         trigger: 'on_tool_call',
         url: '',
-        payloadFields: ['caller_number', 'transcript'],
+        payloadFields: ['caller_number', 'transcript', 'summary'],
     };
 }
 
@@ -36,10 +39,13 @@ function renderPayloadPreview(webhook) {
     webhook.payloadFields.forEach(field => {
         switch (field) {
             case 'caller_number': payload.caller_number = '+61412345678'; break;
-            case 'transcript': payload.transcript = 'Hi, I would like to book an appointment...'; break;
+            case 'transcript': payload.transcript = 'Hi, I would like to book an appointment for a hot water system install...'; break;
             case 'call_duration': payload.call_duration_seconds = 142; break;
+            case 'summary': payload.summary = 'Customer called to book a hot water system installation at their Bondi home. Confirmed 3pm Tuesday appointment. Prefers electric tankless unit.'; break;
+            case 'address': payload.address = { street: '42 Ocean Avenue', suburb: 'Bondi', state: 'NSW', postcode: '2026' }; break;
+            case 'installer_message': payload.installer_message = 'Customer has a narrow access path on the left side of the house. Electric tankless preferred. Old unit is a 250L gas storage — will need gas cap-off. Access code for gate: 4821.'; break;
             case 'custom_data': payload.custom_data = {}; break;
-            case 'extracted_fields': payload.extracted_fields = { name: 'John', email: 'john@example.com' }; break;
+            case 'extracted_fields': payload.extracted_fields = { name: 'John Smith', email: 'john@example.com', service_type: 'Hot Water Install' }; break;
             case 'agent_name': payload.agent_name = 'Sales Assistant'; break;
             case 'timestamp': payload.timestamp = new Date().toISOString(); break;
         }
@@ -107,6 +113,12 @@ export function renderWebhookBuilder(webhooks = [], onChange) {
         </div>
         <div class="payload-preview-label">Preview Payload</div>
         <pre class="payload-preview">${renderPayloadPreview(wh)}</pre>
+        <div class="webhook-test-row">
+          <button class="btn btn-secondary btn-sm wh-test-btn" data-idx="${i}" ${!wh.url ? 'disabled' : ''}>
+            🚀 Send Test Payload
+          </button>
+          <span class="wh-test-status" data-idx="${i}"></span>
+        </div>
       `;
 
             list.appendChild(item);
@@ -164,6 +176,9 @@ export function renderWebhookBuilder(webhooks = [], onChange) {
                 const idx = parseInt(e.target.dataset.idx);
                 webhooks[idx].url = e.target.value;
                 onChange(webhooks);
+                // Enable/disable test button
+                const testBtn = el.querySelector(`.wh-test-btn[data-idx="${idx}"]`);
+                if (testBtn) testBtn.disabled = !e.target.value;
             });
         });
 
@@ -197,8 +212,134 @@ export function renderWebhookBuilder(webhooks = [], onChange) {
                 });
             });
         });
+
+        // Test payload buttons
+        el.querySelectorAll('.wh-test-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const idx = parseInt(e.currentTarget.dataset.idx);
+                const wh = webhooks[idx];
+                const statusEl = el.querySelector(`.wh-test-status[data-idx="${idx}"]`);
+
+                if (!wh.url) return;
+
+                // Build payload
+                const payload = JSON.parse(renderPayloadPreview(wh));
+
+                // Update UI
+                btn.disabled = true;
+                btn.textContent = '⏳ Sending...';
+                statusEl.textContent = '';
+                statusEl.className = 'wh-test-status';
+
+                try {
+                    const resp = await fetch('/api/webhook/test', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: wh.url, payload }),
+                    });
+
+                    const result = await resp.json();
+
+                    if (resp.ok && result.success) {
+                        statusEl.textContent = `✅ Sent! (${result.status})`;
+                        statusEl.className = 'wh-test-status success';
+                    } else {
+                        statusEl.textContent = `❌ Failed: ${result.error || result.status}`;
+                        statusEl.className = 'wh-test-status error';
+                    }
+                } catch (err) {
+                    statusEl.textContent = `❌ ${err.message}`;
+                    statusEl.className = 'wh-test-status error';
+                }
+
+                btn.disabled = false;
+                btn.textContent = '🚀 Send Test Payload';
+
+                // Auto-clear status after 8s
+                setTimeout(() => {
+                    if (statusEl) {
+                        statusEl.textContent = '';
+                        statusEl.className = 'wh-test-status';
+                    }
+                }, 8000);
+            });
+        });
     }
 
     render();
     return el;
+}
+
+// ── Build OpenAI tools array from webhook config ──────────
+// Used by voice-test.js and telnyx_bot to register tools with the AI
+export function buildToolsFromWebhooks(webhooks) {
+    if (!webhooks || webhooks.length === 0) return [];
+
+    return webhooks
+        .filter(wh => wh.trigger === 'on_tool_call' && wh.name && wh.url)
+        .map(wh => {
+            const toolName = wh.name
+                .toLowerCase()
+                .replace(/[^a-z0-9_]/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_|_$/g, '') || 'webhook_action';
+
+            // Build parameters from payload fields
+            const properties = {};
+            const descriptions = {
+                caller_number: 'The caller phone number',
+                transcript: 'Full conversation transcript',
+                call_duration: 'Duration of the call in seconds',
+                summary: 'Brief summary of the conversation and outcome',
+                address: 'Customer address (street, suburb, state, postcode)',
+                installer_message: 'Detailed message for the installer with special instructions, access notes, and job specifics',
+                custom_data: 'Any additional custom data',
+                extracted_fields: 'Extracted information like name, email, service type',
+                agent_name: 'Name of the AI agent',
+                timestamp: 'ISO timestamp of when this was triggered',
+            };
+
+            wh.payloadFields.forEach(field => {
+                if (field === 'address') {
+                    properties[field] = {
+                        type: 'object',
+                        description: descriptions[field],
+                        properties: {
+                            street: { type: 'string' },
+                            suburb: { type: 'string' },
+                            state: { type: 'string' },
+                            postcode: { type: 'string' },
+                        },
+                    };
+                } else if (field === 'extracted_fields' || field === 'custom_data') {
+                    properties[field] = {
+                        type: 'object',
+                        description: descriptions[field],
+                    };
+                } else if (field === 'call_duration') {
+                    properties[field] = {
+                        type: 'number',
+                        description: descriptions[field],
+                    };
+                } else {
+                    properties[field] = {
+                        type: 'string',
+                        description: descriptions[field] || field,
+                    };
+                }
+            });
+
+            return {
+                type: 'function',
+                name: toolName,
+                description: `Trigger the "${wh.name}" webhook. Use this when the caller's request matches this action.`,
+                parameters: {
+                    type: 'object',
+                    properties,
+                },
+                // Store the webhook URL for runtime lookup
+                _webhookUrl: wh.url,
+                _webhookId: wh.id,
+            };
+        });
 }

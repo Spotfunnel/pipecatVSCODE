@@ -227,7 +227,7 @@ export function renderOnboarding(container) {
 
       // Voice test
       const mount = el.querySelector('#voiceTestMount');
-      if (mount) mount.appendChild(renderVoiceTest(() => agentData.systemPrompt, () => agentData.selectedVoice));
+      if (mount) mount.appendChild(renderVoiceTest(() => agentData.systemPrompt, () => agentData.selectedVoice, () => agentData.webhooks));
 
       // Navigation
       el.querySelector('#backBtn')?.addEventListener('click', () => { currentStep = 1; render(); });

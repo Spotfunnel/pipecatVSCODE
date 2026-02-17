@@ -873,6 +873,34 @@ img {
   line-height: 1.8;
 }
 
+.webhook-test-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: var(--font-xs);
+}
+
+.wh-test-status {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  transition: color var(--transition-fast);
+}
+
+.wh-test-status.success {
+  color: var(--accent-emerald);
+}
+
+.wh-test-status.error {
+  color: var(--accent-rose);
+}
+
 .payload-preview-label {
   font-family: var(--font-family);
   font-size: var(--font-xs);
@@ -1053,6 +1081,16 @@ img {
 
 .transcript-agent .transcript-role {
   color: var(--accent-purple);
+}
+
+.transcript-webhook {
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--text-secondary);
+  border-left: 2px solid var(--accent-emerald);
+}
+
+.transcript-webhook .transcript-role {
+  color: var(--accent-emerald);
 }
 
 .voice-btn:disabled {

@@ -1,0 +1,17 @@
+[
+    {
+        "id": "wh_example1",
+        "name": "Booking Request",
+        "trigger": "on_tool_call",
+        "url": "https://your-n8n-instance.com/webhook/booking",
+        "payloadFields": [
+            "caller_number",
+            "transcript",
+            "summary",
+            "address",
+            "installer_message",
+            "extracted_fields",
+            "timestamp"
+        ]
+    }
+]
