@@ -271,8 +271,8 @@ async def handle_inbound_call(request: Request):
     public_url = os.getenv("BOT_PUBLIC_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "localhost")
     ws_url = f"wss://{public_url}/ws"
     
-    # TeXML response: Connect to our WebSocket with bidirectional L16 16kHz audio (HD quality)
-    texml = f'<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Connect>\n    <Stream url="{ws_url}" bidirectionalMode="rtp" bidirectionalCodec="L16" bidirectionalSamplingRate="16000"></Stream>\n  </Connect>\n  <Pause length="40"/>\n</Response>'
+    # TeXML response: Connect to our WebSocket with bidirectional PCMU audio
+    texml = f'<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Connect>\n    <Stream url="{ws_url}" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000"></Stream>\n  </Connect>\n  <Pause length="40"/>\n</Response>'
     
     logger.info(f"Responding with TeXML: {texml}")
     return HTMLResponse(content=texml, media_type="application/xml")
@@ -312,12 +312,12 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.warning(f"Telnyx negotiated {outbound_encoding} but serializer only supports PCMU/PCMA. Forcing PCMU.")
             outbound_encoding = "PCMU"
         
-        # L16 encoding at 16kHz for HD audio quality
+        # PCMU encoding — the only encoding TelnyxFrameSerializer reliably supports
         serializer = TelnyxFrameSerializer(
             stream_id=stream_id,
             call_control_id=call_control_id,
-            outbound_encoding="L16",
-            inbound_encoding="L16",
+            outbound_encoding="PCMU",
+            inbound_encoding="PCMU",
             api_key=os.getenv("TELNYX_API_KEY"),
         )
         
@@ -419,8 +419,8 @@ async def websocket_endpoint(websocket: WebSocket):
             pipeline,
             params=PipelineParams(
                 enable_metrics=True,
-                audio_in_sample_rate=16000,
-                audio_out_sample_rate=16000,
+                audio_in_sample_rate=8000,
+                audio_out_sample_rate=8000,
                 allow_interruptions=True,
             )
         )
