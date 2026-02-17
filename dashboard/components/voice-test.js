@@ -149,6 +149,8 @@ export function renderVoiceTest(getSystemPrompt, getVoice) {
                 // 4. Set up remote audio playback (AI voice output)
                 audioEl = document.createElement('audio');
                 audioEl.autoplay = true;
+                audioEl.muted = false; // Ensure not muted
+                audioEl.volume = 1.0;
                 document.body.appendChild(audioEl);
 
                 pc.ontrack = (e) => {
@@ -164,7 +166,10 @@ export function renderVoiceTest(getSystemPrompt, getVoice) {
                 };
 
                 // 5. Add local audio track
-                pc.addTrack(localStream.getTracks()[0]);
+                localStream.getTracks().forEach(track => {
+                    console.log('[VoiceTest] Adding local track:', track.kind);
+                    pc.addTrack(track, localStream);
+                });
 
                 // 6. Create data channel for events
                 dc = pc.createDataChannel('oai-events');
@@ -172,21 +177,8 @@ export function renderVoiceTest(getSystemPrompt, getVoice) {
                 let currentAssistantText = '';
 
                 dc.onopen = () => {
-                    // Read system prompt FRESH at connection time (not stale from render time)
-                    const currentPrompt = typeof getSystemPrompt === 'function' ? getSystemPrompt() : (getSystemPrompt || '');
-                    const instructions = currentPrompt || 'You are a helpful voice AI assistant. Keep responses concise. Always respond in English only.';
-                    console.log('[VoiceTest] Data channel open — sending session config');
-                    console.log('[VoiceTest] Instructions:', instructions.substring(0, 100) + '...');
-                    // GA API session.update only supports: type, instructions, tools, tool_choice
-                    // Voice, model, turn_detection etc. are configured at session creation, not update
-                    dc.send(JSON.stringify({
-                        type: 'session.update',
-                        session: {
-                            type: 'realtime',
-                            instructions: instructions,
-                        },
-                    }));
-                    console.log('[VoiceTest] session.update sent');
+                    console.log('[VoiceTest] Data channel open');
+                    // Removed redundant session.update as it's pre-configured in vite.config.js proxy
 
                     // Start session timer
                     sessionStartTime = Date.now();
