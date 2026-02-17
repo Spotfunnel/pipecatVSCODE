@@ -16,6 +16,13 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
+from pipecat.services.openai.realtime.events import (
+    AudioConfiguration,
+    AudioInput,
+    InputAudioTranscription,
+    SemanticTurnDetection,
+    SessionProperties,
+)
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -31,10 +38,12 @@ logger = logging.getLogger(__name__)
 
 load_dotenv(override=True)
 
-# ── Webhook Configuration ────────────────────────────────────────────────────
-# Load webhook config from webhooks.json (exported from dashboard)
-# If the file doesn't exist, no webhooks will be registered
-WEBHOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'webhooks.json')
+# ── Configuration Files ──────────────────────────────────────────────────────
+# Load webhook config from webhooks.json and agent config from agent_config.json
+# Both are exported from the dashboard and COPY'd into the Docker image
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+WEBHOOKS_FILE = os.path.join(APP_DIR, 'webhooks.json')
+AGENT_CONFIG_FILE = os.path.join(APP_DIR, 'agent_config.json')
 
 
 def load_webhooks():
@@ -50,6 +59,27 @@ def load_webhooks():
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in {WEBHOOKS_FILE}: {e}")
         return []
+
+
+def load_agent_config():
+    """Load agent configuration (prompt, voice, etc.) from agent_config.json."""
+    default_config = {
+        'name': 'AI Assistant',
+        'voice': 'coral',
+        'systemPrompt': 'You are a helpful and professional AI assistant talking over the phone. Always respond in English. Be warm and conversational.',
+        'description': '',
+    }
+    try:
+        with open(AGENT_CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            logger.info(f"Loaded agent config from {AGENT_CONFIG_FILE}: name={config.get('name')}, voice={config.get('voice')}")
+            return {**default_config, **config}
+    except FileNotFoundError:
+        logger.warning(f"No agent_config.json found at {AGENT_CONFIG_FILE} — using defaults")
+        return default_config
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in {AGENT_CONFIG_FILE}: {e}")
+        return default_config
 
 
 def build_tools_from_webhooks(webhooks):
@@ -343,15 +373,28 @@ async def websocket_endpoint(websocket: WebSocket):
         webhooks = load_webhooks()
         tools, tool_url_map = build_tools_from_webhooks(webhooks)
 
-        # Build LLM config
-        system_prompt = (
-            "You are a helpful and professional AI assistant talking over the phone. "
-            "Always respond in English. Be warm and conversational."
+        # Build LLM config from agent_config.json
+        agent_config = load_agent_config()
+        system_prompt = agent_config['systemPrompt']
+        voice = agent_config.get('voice', 'coral')
+        logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
+
+        # Configure OpenAI Realtime session for optimal quality
+        session_properties = SessionProperties(
+            audio=AudioConfiguration(
+                input=AudioInput(
+                    transcription=InputAudioTranscription(),
+                    turn_detection=SemanticTurnDetection(),
+                )
+            ),
+            instructions=system_prompt,
         )
+
         llm_kwargs = {
             'api_key': os.getenv("OPENAI_API_KEY"),
             'model': "gpt-realtime",
-            'instructions': system_prompt,
+            'voice': voice,
+            'session_properties': session_properties,
         }
 
         # Add tools (webhooks + built-in transfer_call)

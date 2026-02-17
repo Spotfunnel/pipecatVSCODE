@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY telnyx_bot.py .
 COPY webhooks.json .
+COPY agent_config.json .
 
 # Railway injects PORT env var; uvicorn in telnyx_bot.py uses 8000 by default
 # We override via CMD to respect Railway's PORT
