@@ -227,6 +227,12 @@ export function renderVoiceTest(getSystemPrompt, getVoice, getWebhooks) {
                         console.log('[VoiceTest] Function calling enabled with', tools.length, 'tools');
                     }
 
+                    // Trigger the AI to speak first (inbound call greeting)
+                    // The system prompt should contain the greeting message.
+                    dc.send(JSON.stringify({ type: 'response.create' }));
+                    console.log('[VoiceTest] Sent response.create — AI will speak first');
+                    setStatus('🔊 Agent greeting...', 'var(--accent-purple)');
+
                     // Start session timer
                     sessionStartTime = Date.now();
                     sessionTimer = setInterval(() => {

@@ -311,7 +311,21 @@ export function buildToolsFromWebhooks(webhooks) {
                             postcode: { type: 'string' },
                         },
                     };
-                } else if (field === 'extracted_fields' || field === 'custom_data') {
+                } else if (field === 'extracted_fields') {
+                    properties[field] = {
+                        type: 'object',
+                        description: 'All information collected from the caller during the conversation. ALWAYS include every piece of information the caller provided.',
+                        properties: {
+                            name: { type: 'string', description: 'Caller\'s full name' },
+                            email: { type: 'string', description: 'Caller\'s email address' },
+                            phone: { type: 'string', description: 'Caller\'s phone number' },
+                            company: { type: 'string', description: 'Caller\'s company or business name' },
+                            service_type: { type: 'string', description: 'Type of service requested' },
+                            preferred_date: { type: 'string', description: 'Preferred date/time for appointment' },
+                            notes: { type: 'string', description: 'Any other relevant details mentioned by the caller' },
+                        },
+                    };
+                } else if (field === 'custom_data') {
                     properties[field] = {
                         type: 'object',
                         description: descriptions[field],
