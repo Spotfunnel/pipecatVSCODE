@@ -113,7 +113,13 @@ def build_tools_from_webhooks(webhooks):
             elif field == 'custom_data':
                 properties[field] = {
                     'type': 'object',
-                    'description': field_descriptions.get(field, field),
+                    'description': 'Additional context from the conversation',
+                    'properties': {
+                        'reason': {'type': 'string', 'description': 'Why the caller is reaching out'},
+                        'urgency': {'type': 'string', 'description': 'How urgent the request is (low, medium, high, emergency)'},
+                        'callback_number': {'type': 'string', 'description': 'Number to call back on (if different from caller)'},
+                        'message': {'type': 'string', 'description': 'Message or notes from the caller'},
+                    },
                 }
             elif field == 'call_duration':
                 properties[field] = {
@@ -126,10 +132,19 @@ def build_tools_from_webhooks(webhooks):
                     'description': field_descriptions.get(field, field),
                 }
 
+        # Build context-aware tool description
+        name_lower = wh['name'].lower()
+        if any(kw in name_lower for kw in ('human', 'callback', 'message')):
+            tool_desc = f'Trigger the "{wh["name"]}" webhook. Use this when the caller asks to speak to a real person, leave a message, or requests a callback. Collect their name, phone number, and reason before triggering.'
+        elif any(kw in name_lower for kw in ('booking', 'appointment')):
+            tool_desc = f'Trigger the "{wh["name"]}" webhook. Use this when the caller wants to book an appointment or service. Collect their details before triggering.'
+        else:
+            tool_desc = f'Trigger the "{wh["name"]}" webhook. Use this when the caller\'s request matches this action. Collect all relevant information before triggering.'
+
         tool = {
             'type': 'function',
             'name': tool_name,
-            'description': f'Trigger the "{wh["name"]}" webhook. Use this when the caller\'s request matches this action.',
+            'description': tool_desc,
             'parameters': {
                 'type': 'object',
                 'properties': properties,
@@ -139,6 +154,23 @@ def build_tools_from_webhooks(webhooks):
         tools.append(tool)
         tool_url_map[tool_name] = wh['url']
         logger.info(f"  Registered tool: {tool_name} → {wh['url']}")
+
+    # Always add built-in end_call tool
+    tools.append({
+        'type': 'function',
+        'name': 'end_call',
+        'description': 'End the phone call. ONLY use this after you have completely finished speaking your goodbye message and the conversation is fully concluded.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'reason': {
+                    'type': 'string',
+                    'description': 'Why the call is ending (e.g. "conversation_complete", "caller_requested", "all_tasks_done")',
+                },
+            },
+        },
+    })
+    logger.info(f"  Registered built-in tool: end_call")
 
     return tools, tool_url_map
 
@@ -268,10 +300,9 @@ async def websocket_endpoint(websocket: WebSocket):
             'instructions': "You are a helpful and friendly AI assistant talking over the phone. Always respond in English.",
         }
 
-        # Add tools if any webhooks are configured
-        if tools:
-            llm_kwargs['tools'] = tools
-            logger.info(f"Registered {len(tools)} function-calling tools")
+        # Add tools — always have at least end_call
+        llm_kwargs['tools'] = tools
+        logger.info(f"Registered {len(tools)} function-calling tools (including end_call)")
 
         # OpenAI Realtime LLM
         llm = OpenAIRealtimeLLMService(**llm_kwargs)
@@ -279,12 +310,19 @@ async def websocket_endpoint(websocket: WebSocket):
         # ── Handle function calls from the AI ────────────────────
         @llm.event_handler("on_function_call")
         async def on_function_call(llm_service, function_name, arguments, call_id):
-            """Called when the AI invokes a function-calling tool.
-            
-            We fire the corresponding webhook and return the result to the AI.
-            """
+            """Called when the AI invokes a function-calling tool."""
             logger.info(f"Function call: {function_name}({json.dumps(arguments)}) call_id={call_id}")
 
+            # ── Built-in: end_call ──────────────────
+            if function_name == 'end_call':
+                reason = arguments.get('reason', 'conversation_complete')
+                logger.info(f"End call requested: {reason}")
+                # Wait 2s for goodbye audio to finish, then end pipeline
+                await asyncio.sleep(2.0)
+                await task.queue_frames([EndFrame()])
+                return json.dumps({'success': True, 'message': 'Call ended gracefully'})
+
+            # ── Webhook tools ──────────────────────
             webhook_url = tool_url_map.get(function_name)
             if webhook_url:
                 result = await fire_webhook(webhook_url, arguments)

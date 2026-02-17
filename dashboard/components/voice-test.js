@@ -138,6 +138,22 @@ export function renderVoiceTest(getSystemPrompt, getVoice, getWebhooks) {
                 console.log('[VoiceTest] Registered', tools.length, 'tools from webhooks:', Object.keys(toolWebhookMap));
             }
 
+            // Always add built-in end_call tool
+            tools.push({
+                type: 'function',
+                name: 'end_call',
+                description: 'End the phone call. ONLY use this after you have completely finished speaking your goodbye message and the conversation is fully concluded. The caller will hear everything you say before this tool is triggered.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        reason: {
+                            type: 'string',
+                            description: 'Why the call is ending (e.g. "conversation_complete", "caller_requested", "all_tasks_done")',
+                        },
+                    },
+                },
+            });
+
             try {
                 setStatus('🔐 Connecting to OpenAI Realtime...', 'var(--accent-cyan)');
                 btn.disabled = true;
@@ -321,6 +337,33 @@ export function renderVoiceTest(getSystemPrompt, getVoice, getWebhooks) {
                                 }
 
                                 console.log('[VoiceTest] Function call:', toolName, args);
+
+                                // ── Built-in: end_call ──────────────────
+                                if (toolName === 'end_call') {
+                                    appendTranscript('webhook', `👋 Ending call (${args.reason || 'conversation complete'})`);
+                                    setStatus('👋 Call ending...', 'var(--text-tertiary)');
+
+                                    // Send tool result so the AI knows it worked
+                                    if (dc && dc.readyState === 'open') {
+                                        dc.send(JSON.stringify({
+                                            type: 'conversation.item.create',
+                                            item: {
+                                                type: 'function_call_output',
+                                                call_id: callId,
+                                                output: JSON.stringify({ success: true, message: 'Call will end after goodbye' }),
+                                            },
+                                        }));
+                                    }
+
+                                    // Wait 2.5s for goodbye audio to finish playing, then disconnect
+                                    setTimeout(() => {
+                                        cleanup();
+                                        setStatus('✅ Call ended gracefully. Click to start again.', 'var(--text-tertiary)');
+                                    }, 2500);
+                                    break;
+                                }
+
+                                // ── Webhook tools ──────────────────────
                                 setStatus('🔗 Firing webhook...', 'var(--accent-emerald)');
                                 appendTranscript('webhook', `🚀 Calling <b>${toolName}</b>...`);
 

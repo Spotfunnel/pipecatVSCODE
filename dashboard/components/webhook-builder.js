@@ -20,6 +20,23 @@ const PAYLOAD_FIELDS = [
     'timestamp',
 ];
 
+const WEBHOOK_PRESETS = [
+    {
+        label: '🙋 Human Requested',
+        name: 'Human Requested',
+        trigger: 'on_tool_call',
+        payloadFields: ['caller_number', 'summary', 'extracted_fields', 'timestamp'],
+        description: 'Fires when the caller asks to leave a message, speak to a real person, or requests a callback.',
+    },
+    {
+        label: '📋 Booking Request',
+        name: 'Booking Request',
+        trigger: 'on_tool_call',
+        payloadFields: ['caller_number', 'summary', 'address', 'extracted_fields', 'installer_message', 'timestamp'],
+        description: 'Fires when the caller wants to book an appointment or service.',
+    },
+];
+
 function generateWebhookId() {
     return 'wh_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -30,7 +47,17 @@ function createEmptyWebhook() {
         name: '',
         trigger: 'on_tool_call',
         url: '',
-        payloadFields: ['caller_number', 'transcript', 'summary'],
+        payloadFields: ['caller_number', 'transcript', 'summary', 'extracted_fields'],
+    };
+}
+
+function createPresetWebhook(preset) {
+    return {
+        id: generateWebhookId(),
+        name: preset.name,
+        trigger: preset.trigger,
+        url: '',
+        payloadFields: [...preset.payloadFields],
     };
 }
 
@@ -126,16 +153,36 @@ export function renderWebhookBuilder(webhooks = [], onChange) {
 
         el.appendChild(list);
 
-        // Add webhook button
+        // Preset + Add buttons row
+        const btnRow = document.createElement('div');
+        btnRow.className = 'webhook-btn-row';
+        btnRow.style.cssText = 'display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-lg);';
+
+        // Preset buttons
+        WEBHOOK_PRESETS.forEach(preset => {
+            const preBtn = document.createElement('button');
+            preBtn.className = 'btn btn-ghost btn-sm';
+            preBtn.innerHTML = preset.label;
+            preBtn.title = preset.description;
+            preBtn.addEventListener('click', () => {
+                webhooks.push(createPresetWebhook(preset));
+                onChange(webhooks);
+                render();
+            });
+            btnRow.appendChild(preBtn);
+        });
+
+        // Generic add button
         const addBtn = document.createElement('button');
-        addBtn.className = 'btn btn-secondary mt-lg';
-        addBtn.innerHTML = '+ Add Webhook';
+        addBtn.className = 'btn btn-secondary btn-sm';
+        addBtn.innerHTML = '+ Custom Webhook';
         addBtn.addEventListener('click', () => {
             webhooks.push(createEmptyWebhook());
             onChange(webhooks);
             render();
         });
-        el.appendChild(addBtn);
+        btnRow.appendChild(addBtn);
+        el.appendChild(btnRow);
 
         // Bind events
         bindEvents();
@@ -328,7 +375,13 @@ export function buildToolsFromWebhooks(webhooks) {
                 } else if (field === 'custom_data') {
                     properties[field] = {
                         type: 'object',
-                        description: descriptions[field],
+                        description: 'Additional context from the conversation',
+                        properties: {
+                            reason: { type: 'string', description: 'Why the caller is reaching out' },
+                            urgency: { type: 'string', description: 'How urgent the request is (low, medium, high, emergency)' },
+                            callback_number: { type: 'string', description: 'Number to call back on (if different from caller)' },
+                            message: { type: 'string', description: 'Message or notes from the caller' },
+                        },
                     };
                 } else if (field === 'call_duration') {
                     properties[field] = {
@@ -343,10 +396,21 @@ export function buildToolsFromWebhooks(webhooks) {
                 }
             });
 
+            // Build a more descriptive tool description based on the webhook name
+            let toolDescription;
+            const nameLower = wh.name.toLowerCase();
+            if (nameLower.includes('human') || nameLower.includes('callback') || nameLower.includes('message')) {
+                toolDescription = `Trigger the "${wh.name}" webhook. Use this when the caller asks to speak to a real person, leave a message, or requests a callback. Collect their name, phone number, and reason before triggering.`;
+            } else if (nameLower.includes('booking') || nameLower.includes('appointment')) {
+                toolDescription = `Trigger the "${wh.name}" webhook. Use this when the caller wants to book an appointment or service. Collect their details (name, contact info, address, preferred time) before triggering.`;
+            } else {
+                toolDescription = `Trigger the "${wh.name}" webhook. Use this when the caller's request matches this action. Collect all relevant information before triggering.`;
+            }
+
             return {
                 type: 'function',
                 name: toolName,
-                description: `Trigger the "${wh.name}" webhook. Use this when the caller's request matches this action.`,
+                description: toolDescription,
                 parameters: {
                     type: 'object',
                     properties,
