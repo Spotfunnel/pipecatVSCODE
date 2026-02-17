@@ -12,6 +12,8 @@ export function renderVoiceTest(getSystemPrompt) {
     let audioEl = null;    // Remote audio playback
     let localStream = null;
     let isActive = false;
+    let sessionTimer = null;
+    let sessionStartTime = null;
 
     el.innerHTML = `
     <p class="voice-tester-text">Test your agent's voice and personality in real-time</p>
@@ -58,6 +60,12 @@ export function renderVoiceTest(getSystemPrompt) {
 
         function cleanup() {
             isActive = false;
+            btn.classList.remove('recording');
+            btn.classList.remove('active'); // Added
+            btn.textContent = '🎙️';
+            btn.disabled = false;
+            viz.classList.remove('active'); // Added
+            if (sessionTimer) { clearInterval(sessionTimer); sessionTimer = null; } // Added
             if (dc) { try { dc.close(); } catch { } dc = null; }
             if (pc) { try { pc.close(); } catch { } pc = null; }
             if (localStream) {
@@ -65,13 +73,18 @@ export function renderVoiceTest(getSystemPrompt) {
                 localStream = null;
             }
             if (audioEl) {
+                audioEl.pause(); // Added
                 audioEl.srcObject = null;
+                audioEl.remove(); // Added
                 audioEl = null;
             }
-            btn.classList.remove('recording');
-            btn.textContent = '🎙️';
-            btn.disabled = false;
-            viz.classList.remove('active');
+        }
+
+        function formatDuration(ms) {
+            const secs = Math.floor(ms / 1000);
+            const m = Math.floor(secs / 60);
+            const s = secs % 60;
+            return `${m}:${s.toString().padStart(2, '0')}`;
         }
 
         async function startSession() {
@@ -87,7 +100,6 @@ export function renderVoiceTest(getSystemPrompt) {
                     body: JSON.stringify({
                         model: 'gpt-realtime',
                         voice: 'ash',
-                        instructions: systemPrompt || 'You are a helpful voice AI assistant. Keep responses concise.',
                     }),
                 });
 
@@ -161,13 +173,27 @@ export function renderVoiceTest(getSystemPrompt) {
                         },
                     }));
                     console.log('[VoiceTest] session.update sent');
+
+                    // Start session timer
+                    sessionStartTime = Date.now();
+                    sessionTimer = setInterval(() => {
+                        if (isActive) {
+                            const elapsed = formatDuration(Date.now() - sessionStartTime);
+                            const currentStatus = status.textContent;
+                            // Only update timer if we're in a "waiting" state
+                            if (currentStatus.includes('Your turn') || currentStatus.includes('Connected')) {
+                                setStatus(`🎙️ Your turn — speak to your agent (${elapsed})`, 'var(--accent-green)');
+                            }
+                        }
+                    }, 1000);
                 };
 
                 dc.onclose = () => {
-                    console.log('[VoiceTest] Data channel closed');
+                    const duration = sessionStartTime ? formatDuration(Date.now() - sessionStartTime) : 'unknown';
+                    console.log('[VoiceTest] Data channel closed after', duration);
                     if (isActive) {
                         cleanup();
-                        setStatus('⚠️ Session ended by server. Click to restart.', 'var(--accent-rose)');
+                        setStatus(`⚠️ Session ended after ${duration}. Click 🎙️ to start a new test.`, 'var(--accent-rose)');
                     }
                 };
 
