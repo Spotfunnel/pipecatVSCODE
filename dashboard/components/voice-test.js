@@ -2,7 +2,8 @@
 // Connects to OpenAI Realtime API via WebRTC for live voice testing.
 // Flow: get ephemeral token → RTCPeerConnection → mic audio → AI responds
 
-export function renderVoiceTest(systemPrompt) {
+// getSystemPrompt: function that returns the current system prompt string
+export function renderVoiceTest(getSystemPrompt) {
     const el = document.createElement('div');
     el.className = 'voice-tester';
 
@@ -145,7 +146,9 @@ export function renderVoiceTest(systemPrompt) {
                 let currentAssistantText = '';
 
                 dc.onopen = () => {
-                    const instructions = systemPrompt || 'You are a helpful voice AI assistant. Keep responses concise.';
+                    // Read system prompt FRESH at connection time (not stale from render time)
+                    const currentPrompt = typeof getSystemPrompt === 'function' ? getSystemPrompt() : (getSystemPrompt || '');
+                    const instructions = currentPrompt || 'You are a helpful voice AI assistant. Keep responses concise. Always respond in English only.';
                     console.log('[VoiceTest] Data channel open — sending session config');
                     console.log('[VoiceTest] Instructions:', instructions.substring(0, 100) + '...');
                     // GA API session.update only supports: type, instructions, tools, tool_choice
