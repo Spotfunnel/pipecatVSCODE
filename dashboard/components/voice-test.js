@@ -145,12 +145,16 @@ export function renderVoiceTest(systemPrompt) {
                 let currentAssistantText = '';
 
                 dc.onopen = () => {
-                    console.log('[VoiceTest] Data channel open — session active');
-                    // Send session config with instructions
+                    const instructions = systemPrompt || 'You are a helpful voice AI assistant. Keep responses concise.';
+                    console.log('[VoiceTest] Data channel open — sending session config');
+                    console.log('[VoiceTest] Instructions:', instructions.substring(0, 100) + '...');
+                    // Send session config with instructions (system prompt)
                     dc.send(JSON.stringify({
                         type: 'session.update',
                         session: {
-                            instructions: systemPrompt || 'You are a helpful voice AI assistant. Keep responses concise.',
+                            type: 'realtime',
+                            model: 'gpt-realtime',
+                            instructions: instructions,
                             voice: 'ash',
                             input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
                             turn_detection: {
