@@ -148,23 +148,16 @@ export function renderVoiceTest(systemPrompt) {
                     const instructions = systemPrompt || 'You are a helpful voice AI assistant. Keep responses concise.';
                     console.log('[VoiceTest] Data channel open — sending session config');
                     console.log('[VoiceTest] Instructions:', instructions.substring(0, 100) + '...');
-                    // Send session config with instructions (system prompt)
+                    // GA API session.update only supports: type, instructions, tools, tool_choice
+                    // Voice, model, turn_detection etc. are configured at session creation, not update
                     dc.send(JSON.stringify({
                         type: 'session.update',
                         session: {
                             type: 'realtime',
-                            model: 'gpt-realtime',
                             instructions: instructions,
-                            voice: 'ash',
-                            input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
-                            turn_detection: {
-                                type: 'server_vad',
-                                threshold: 0.5,
-                                prefix_padding_ms: 300,
-                                silence_duration_ms: 500,
-                            },
                         },
                     }));
+                    console.log('[VoiceTest] session.update sent');
                 };
 
                 dc.onclose = () => {
