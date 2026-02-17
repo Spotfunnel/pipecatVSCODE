@@ -1,0 +1,161 @@
+=== TeXML Applications ===
+{
+  "meta": {
+    "total_pages": 1,
+    "total_results": 2,
+    "page_number": 1,
+    "page_size": 5
+  },
+  "data": [
+    {
+      "id": "2896638176531580022",
+      "record_type": "texml_application",
+      "friendly_name": "pipecatTeXML",
+      "active": true,
+      "anchorsite_override": "Sydney, Australia",
+      "dtmf_type": "RFC 2833",
+      "first_command_timeout": false,
+      "first_command_timeout_secs": 30,
+      "voice_url": "https://antrorse-fluently-beulah.ngrok-free.dev/",
+      "voice_fallback_url": null,
+      "voice_method": "get",
+      "status_callback": null,
+      "status_callback_method": "post",
+      "created_at": "2026-02-16T14:22:59Z",
+      "updated_at": "2026-02-16T15:09:35Z",
+      "tags": [],
+      "rtcp_settings": {
+        "port": "rtp+1",
+        "report_frequency_secs": 5,
+        "capture_enabled": false
+      },
+      "inbound": {
+        "channel_limit": null,
+        "sip_subdomain": null,
+        "sip_subdomain_receive_settings": "from_anyone",
+  
+
+=== Phone Numbers ===
+  Number: +61248539408
+    ID: 2891188789957363275
+    Connection ID: 2896638176531580022
+    Connection Name: pipecatTeXML
+    Status: active
+    Tags: []
+  Number: +61240721931
+    ID: 2891188789948974666
+    Connection ID: 2892194998747400137
+    Connection Name: VAPI Connect
+    Status: active
+    Tags: []
+  Number: +61272542091
+    ID: 2889981623422420468
+    Connection ID: 2892200353011336296
+    Connection Name: Vapi
+    Status: active
+    Tags: []
+  Number: +61240675354
+    ID: 2889981623405643251
+    Connection ID: 2892194998747400137
+    Connection Name: VAPI Connect
+    Status: active
+    Tags: []
+
+=== Connections ===
+{
+  "meta": {
+    "total_pages": 1,
+    "total_results": 3,
+    "page_number": 1,
+    "page_size": 5
+  },
+  "data": [
+    {
+      "id": "2896625412752803012",
+      "record_type": "fqdn_connection",
+      "created_at": "2026-02-16T13:57:37Z",
+      "updated_at": "2026-02-16T14:08:43Z",
+      "connection_name": "PIPECAT Connect ",
+      "outbound_voice_profile_id": "2889947430835455184",
+      "active": true,
+      "anchorsite_override": "Sydney, Australia",
+      "webhook_api_version": "2",
+      "webhook_event_url": "",
+      "webhook_event_failover_url": "",
+      "microsoft_teams_sbc": false,
+      "tags": []
+    },
+    {
+      "id": "2892194998747400137",
+      "record_type": "fqdn_connection",
+      "created_at": "2026-02-10T11:15:11Z",
+      "updated_at": "2026-02-11T01:52:26Z",
+      "connection_name": "VAPI Connect",
+      "outbound_voice_profile_id": "2889947430835455184",
+      "active": true,
+      "anchorsite_override": "Sydney, Australia",
+      "webhook_api_version": "2",
+
+=== Credential Connections ===
+{
+  "meta": {
+    "total_pages": 1,
+    "total_results": 1,
+    "page_number": 1,
+    "page_size": 5
+  },
+  "data": [
+    {
+      "id": "2889947408261711054",
+      "record_type": "credential_connection",
+      "active": true,
+      "user_name": "q1348nk0iuke",
+      "registration_status": "Not Applicable",
+      "registration_status_updated_at": null,
+      "password": "QUeoe65PcOgf",
+      "anchorsite_override": "Latency",
+      "connection_name": "Forward Only",
+      "sip_uri_calling_prefere
+
+=== FQDN Connections ===
+{
+  "meta": {
+    "total_pages": 1,
+    "total_results": 2,
+    "page_number": 1,
+    "page_size": 5
+  },
+  "data": [
+    {
+      "id": "2896625412752803012",
+      "record_type": "fqdn_connection",
+      "active": true,
+      "user_name": "pipecatspotfunnel",
+      "password": "Walkergewert0!",
+      "anchorsite_override": "Sydney, Australia",
+      "connection_name": "PIPECAT Connect ",
+      "transport_protocol": "UDP",
+      "default_on_hold_comfort_noise_enabled": true,
+      "dtmf_type": "
+
+=== Outbound Voice Profiles ===
+{
+  "meta": {
+    "total_pages": 1,
+    "total_results": 2,
+    "page_number": 1,
+    "page_size": 5
+  },
+  "data": [
+    {
+      "id": "2892280083299435566",
+      "record_type": "outbound_voice_profile",
+      "name": "Vapi-AU-Outbound-2091",
+      "connections_count": 0,
+      "traffic_type": "conversational",
+      "service_plan": "global",
+      "concurrent_call_limit": null,
+      "enabled": true,
+      "tags": [],
+      "usage_payment_method": "rate-deck",
+      "whitelisted_destinations"

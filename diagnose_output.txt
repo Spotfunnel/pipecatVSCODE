@@ -1,0 +1,33 @@
+﻿API Key: KEY019C675...u8tdo
+Public URL: antrorse-fluently-beulah.ngrok-free.dev
+
+==================================================
+TEST 1: What does our server return to Telnyx?
+==================================================
+  Status: 200
+  Content-Type: application/xml
+  All headers:
+    Content-Length: 210
+    Content-Type: application/xml
+    Date: Mon, 16 Feb 2026 16:50:19 GMT
+    Ngrok-Agent-Ips: 182.253.92.107
+    Server: uvicorn
+    Connection: close
+  Body (210 bytes):
+  <?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="wss://antrorse-fluently-beulah.ngrok-free.dev/ws" bidirectionalMode="rtp"></Stream>
+  </Connect>
+  <Pause length="40"/>
+</Response>
+
+==================================================
+TEST 2: Recent Telnyx call events
+==================================================
+  Error: HTTP Error 404: Not Found
+
+==================================================
+TEST 3: Recent calls via Call Control API
+==================================================
+  Error: HTTP Error 404: Not Found
