@@ -95,12 +95,17 @@ export function renderVoiceTest(getSystemPrompt, getVoice) {
 
                 // 1. Get ephemeral token
                 setStatus('🔑 Getting session token...', 'var(--accent-cyan)');
+                const currentPrompt = typeof getSystemPrompt === 'function' ? getSystemPrompt() : (getSystemPrompt || '');
+                const instructions = currentPrompt || 'You are a helpful voice AI assistant. Keep responses concise. Always respond in English only.';
+                const selectedVoice = typeof getVoice === 'function' ? getVoice() : 'ash';
+
                 const tokenResp = await fetch('/api/realtime/token', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: 'gpt-realtime',
-                        voice: 'ash',
+                        voice: selectedVoice,
+                        instructions: instructions,
                     }),
                 });
 
@@ -266,24 +271,12 @@ export function renderVoiceTest(getSystemPrompt, getVoice) {
                 setStatus('📡 Establishing WebRTC connection...', 'var(--accent-cyan)');
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
-                const selectedVoice = typeof getVoice === 'function' ? getVoice() : 'ash';
-                console.log('[VoiceTest] SDP offer created, using voice:', selectedVoice);
-
                 const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls?model=gpt-realtime', {
                     method: 'POST',
-                    body: JSON.stringify({
-                        sdp: offer.sdp,
-                        session: {
-                            audio: {
-                                output: {
-                                    voice: selectedVoice
-                                }
-                            }
-                        }
-                    }),
+                    body: offer.sdp,
                     headers: {
                         'Authorization': `Bearer ${ephemeralKey}`,
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/sdp',
                     },
                 });
 

@@ -55,22 +55,28 @@ export default defineConfig({
                         });
 
                         const reqBody = {
+                            type: 'realtime',
                             model: body.model || 'gpt-realtime',
-                            modalities: ['audio', 'text'],
-                            voice: body.voice || 'ash',
+                            instructions: body.instructions || 'You are a helpful assistant.',
+                            audio: {
+                                output: {
+                                    voice: body.voice || 'ash'
+                                }
+                            }
                         };
 
-                        console.log('[Token Proxy] Creating GA client secret...');
+                        console.log('[Token Proxy] Creating GA client secret with voice:', reqBody.voice);
 
                         // GA endpoint: /v1/realtime/client_secrets
-                        // Session config (model, voice, instructions) is sent via data channel
                         const tokenResp = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
                             method: 'POST',
                             headers: {
                                 'Authorization': `Bearer ${apiKey}`,
                                 'Content-Type': 'application/json',
                             },
-                            body: '{}',
+                            body: JSON.stringify({
+                                session: reqBody
+                            }),
                         });
 
                         const result = await tokenResp.json();
@@ -78,7 +84,13 @@ export default defineConfig({
                         res.setHeader('Content-Type', 'application/json');
 
                         if (!tokenResp.ok) {
-                            console.error('[Token Proxy] Error:', JSON.stringify(result));
+                            const errorMsg = `[Token Proxy] OpenAI Error: ${tokenResp.status} ${JSON.stringify(result, null, 2)}`;
+                            console.error(errorMsg);
+                            try {
+                                fs.appendFileSync(path.resolve(__dirname, 'proxy_error.log'), errorMsg + '\n---\n');
+                            } catch (e) {
+                                console.error('Failed to write to log file:', e);
+                            }
                             res.statusCode = tokenResp.status;
                             res.end(JSON.stringify({ error: result.error?.message || 'Token creation failed' }));
                             return;
