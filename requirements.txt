@@ -1,5 +1,5 @@
 # Core framework
-pipecat-ai[silero,openai]==0.0.85
+pipecat-ai[silero,openai]==0.0.102
 fastapi==0.109.0
 uvicorn==0.40.0
 

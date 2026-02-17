@@ -23,9 +23,9 @@ from pipecat.runner.utils import parse_telephony_websocket
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    filename='bot_run.log',
     level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
