@@ -84,7 +84,7 @@ export function renderVoiceTest(systemPrompt) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        model: 'gpt-4o-realtime-preview',
+                        model: 'gpt-realtime',
                         voice: 'ash',
                         instructions: systemPrompt || 'You are a helpful voice AI assistant. Keep responses concise.',
                     }),

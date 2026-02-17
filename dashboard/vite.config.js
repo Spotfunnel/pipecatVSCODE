@@ -55,36 +55,41 @@ export default defineConfig({
                         });
 
                         const reqBody = {
-                            model: body.model || 'gpt-4o-realtime-preview',
+                            model: body.model || 'gpt-realtime',
                             modalities: ['audio', 'text'],
                             voice: body.voice || 'ash',
-                            instructions: body.instructions || 'You are a helpful assistant.',
-                            input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
                         };
 
-                        console.log('[Token Proxy] Creating session with model:', reqBody.model);
+                        console.log('[Token Proxy] Creating GA client secret...');
 
-                        const tokenResp = await fetch('https://api.openai.com/v1/realtime/sessions', {
+                        // GA endpoint: /v1/realtime/client_secrets
+                        // Session config (model, voice, instructions) is sent via data channel
+                        const tokenResp = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
                             method: 'POST',
                             headers: {
                                 'Authorization': `Bearer ${apiKey}`,
                                 'Content-Type': 'application/json',
                             },
-                            body: JSON.stringify(reqBody),
+                            body: '{}',
                         });
 
                         const result = await tokenResp.json();
+                        console.log('[Token Proxy] Response status:', tokenResp.status);
                         res.setHeader('Content-Type', 'application/json');
 
                         if (!tokenResp.ok) {
+                            console.error('[Token Proxy] Error:', JSON.stringify(result));
                             res.statusCode = tokenResp.status;
                             res.end(JSON.stringify({ error: result.error?.message || 'Token creation failed' }));
                             return;
                         }
 
+                        // GA endpoint returns { value: "ek_...", expires_at: ... } at top level
+                        const token = result.value || result.client_secret?.value;
+                        console.log('[Token Proxy] Token obtained:', token?.substring(0, 12) + '...');
                         res.statusCode = 200;
                         res.end(JSON.stringify({
-                            token: result.client_secret?.value,
+                            token: token,
                             expires_at: result.expires_at,
                         }));
                     } catch (err) {
