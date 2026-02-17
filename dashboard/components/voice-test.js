@@ -241,7 +241,7 @@ export function renderVoiceTest(systemPrompt) {
                 await pc.setLocalDescription(offer);
                 console.log('[VoiceTest] SDP offer created');
 
-                const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+                const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls?model=gpt-realtime', {
                     method: 'POST',
                     body: offer.sdp,
                     headers: {
