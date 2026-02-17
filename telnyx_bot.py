@@ -330,8 +330,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(
                     params=VADParams(
-                        threshold=0.55,      # Slightly above default (0.5) to reduce false triggers
-                        min_volume=0.6,      # Ignore quiet sounds / audio bleed
+                        threshold=0.5,       # Default sensitivity
+                        min_volume=0.3,      # Lower for telephony (phone audio is quieter)
                         stop_secs=0.7,       # 700ms max latency as requested
                     )
                 ),
@@ -419,8 +419,8 @@ async def websocket_endpoint(websocket: WebSocket):
             pipeline,
             params=PipelineParams(
                 enable_metrics=True,
-                audio_in_sample_rate=8000,
-                audio_out_sample_rate=8000,
+                audio_in_sample_rate=16000,
+                audio_out_sample_rate=24000,
                 allow_interruptions=True,
             )
         )
