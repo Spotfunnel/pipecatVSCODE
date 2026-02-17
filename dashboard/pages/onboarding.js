@@ -53,6 +53,7 @@ export function renderOnboarding(container) {
     name: '',
     description: '',
     systemPrompt: '',
+    selectedVoice: 'coral',
     webhooks: [],
     phoneConfig: {
       phoneNumber: '',
@@ -164,7 +165,13 @@ export function renderOnboarding(container) {
       </div>
 
       <div class="prompt-section mt-lg">
-        <div class="prompt-section-header">🎤 Voice Test</div>
+        <div class="prompt-section-header">🎤 Voice Selector</div>
+        <p class="voice-selector-hint">Pick a voice, then test it with the mic below</p>
+        <div class="voice-grid" id="voiceGrid"></div>
+      </div>
+
+      <div class="prompt-section mt-lg">
+        <div class="prompt-section-header">🔊 Voice Test</div>
         <div id="voiceTestMount"></div>
       </div>
 
@@ -198,9 +205,29 @@ export function renderOnboarding(container) {
       const textarea = el.querySelector('#systemPrompt');
       textarea?.addEventListener('input', (e) => { agentData.systemPrompt = e.target.value; });
 
+      // Voice selector grid
+      const voiceGrid = el.querySelector('#voiceGrid');
+      VOICE_OPTIONS.forEach(v => {
+        const card = document.createElement('div');
+        card.className = 'voice-card' + (agentData.selectedVoice === v.value ? ' selected' : '');
+        card.dataset.voice = v.value;
+        card.innerHTML = `
+          <div class="voice-card-icon">🎙️</div>
+          <div class="voice-card-name">${v.label}</div>
+          <div class="voice-card-desc">${v.desc}</div>
+        `;
+        card.addEventListener('click', () => {
+          agentData.selectedVoice = v.value;
+          agentData.phoneConfig.voice = v.value;
+          voiceGrid.querySelectorAll('.voice-card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+        });
+        voiceGrid.appendChild(card);
+      });
+
       // Voice test
       const mount = el.querySelector('#voiceTestMount');
-      if (mount) mount.appendChild(renderVoiceTest(() => agentData.systemPrompt));
+      if (mount) mount.appendChild(renderVoiceTest(() => agentData.systemPrompt, () => agentData.selectedVoice));
 
       // Navigation
       el.querySelector('#backBtn')?.addEventListener('click', () => { currentStep = 1; render(); });

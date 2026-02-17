@@ -3,7 +3,8 @@
 // Flow: get ephemeral token → RTCPeerConnection → mic audio → AI responds
 
 // getSystemPrompt: function that returns the current system prompt string
-export function renderVoiceTest(getSystemPrompt) {
+// getVoice: function that returns the selected voice slug (e.g. 'coral')
+export function renderVoiceTest(getSystemPrompt, getVoice) {
     const el = document.createElement('div');
     el.className = 'voice-tester';
 
@@ -265,14 +266,24 @@ export function renderVoiceTest(getSystemPrompt) {
                 setStatus('📡 Establishing WebRTC connection...', 'var(--accent-cyan)');
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
-                console.log('[VoiceTest] SDP offer created');
+                const selectedVoice = typeof getVoice === 'function' ? getVoice() : 'ash';
+                console.log('[VoiceTest] SDP offer created, using voice:', selectedVoice);
 
                 const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls?model=gpt-realtime', {
                     method: 'POST',
-                    body: offer.sdp,
+                    body: JSON.stringify({
+                        sdp: offer.sdp,
+                        session: {
+                            audio: {
+                                output: {
+                                    voice: selectedVoice
+                                }
+                            }
+                        }
+                    }),
                     headers: {
                         'Authorization': `Bearer ${ephemeralKey}`,
-                        'Content-Type': 'application/sdp',
+                        'Content-Type': 'application/json',
                     },
                 });
 
