@@ -155,7 +155,36 @@ def build_tools_from_webhooks(webhooks):
         tool_url_map[tool_name] = wh['url']
         logger.info(f"  Registered tool: {tool_name} → {wh['url']}")
 
-    logger.info(f"  Built {len(tools)} webhook tools")
+    # Always add built-in transfer_call tool
+    tools.append({
+        'type': 'function',
+        'name': 'transfer_call',
+        'description': (
+            'Transfer/forward the current phone call to an external phone number. '
+            'Use this when the caller needs to speak to a real person, or when the prompt '
+            'instructs you to forward calls to a specific number. '
+            'IMPORTANT: Before calling this tool, tell the caller you are transferring them '
+            'and to whom. Example: "Let me transfer you to the team now. One moment please." '
+            'The call will be connected to the destination number.'
+        ),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'destination_number': {
+                    'type': 'string',
+                    'description': 'The phone number to transfer the call to, in E.164 format (e.g. "+61412345678")',
+                },
+                'reason': {
+                    'type': 'string',
+                    'description': 'Brief reason for the transfer (e.g. "caller requested human agent", "scheduling inquiry")',
+                },
+            },
+            'required': ['destination_number'],
+        },
+    })
+    logger.info(f"  Registered built-in tool: transfer_call")
+
+    logger.info(f"  Built {len(tools)} total tools")
 
     return tools, tool_url_map
 
@@ -174,7 +203,42 @@ async def fire_webhook(url, payload):
                     'response': body[:500],
                 }
     except Exception as e:
-        logger.error(f"Webhook error for {url}: {e}")
+        logger.error(f"Webhook error: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def transfer_call_via_telnyx(call_control_id, destination_number, from_number):
+    """Transfer the active call to an external number using Telnyx Call Control API."""
+    api_key = os.getenv("TELNYX_API_KEY")
+    url = f"https://api.telnyx.com/v2/calls/{call_control_id}/actions/transfer"
+    payload = {
+        "to": destination_number,
+    }
+    # Set caller ID to the Telnyx number so the recipient sees it
+    if from_number:
+        payload["from"] = from_number
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                status = resp.status
+                body = await resp.text()
+                logger.info(f"Telnyx transfer → HTTP {status}: {body[:200]}")
+                return {
+                    'success': 200 <= status < 300,
+                    'status': status,
+                    'response': body[:500],
+                }
+    except Exception as e:
+        logger.error(f"Transfer error: {e}")
         return {'success': False, 'error': str(e)}
 
 
@@ -290,9 +354,8 @@ async def websocket_endpoint(websocket: WebSocket):
             'instructions': system_prompt,
         }
 
-        # Add webhook tools (if any)
-        if tools:
-            llm_kwargs['tools'] = tools
+        # Add tools (webhooks + built-in transfer_call)
+        llm_kwargs['tools'] = tools
         logger.info(f"Registered {len(tools)} function-calling tools")
 
         # OpenAI Realtime LLM
@@ -303,6 +366,26 @@ async def websocket_endpoint(websocket: WebSocket):
         async def on_function_call(llm_service, function_name, arguments, call_id):
             """Called when the AI invokes a function-calling tool."""
             logger.info(f"Function call: {function_name}({json.dumps(arguments)}) call_id={call_id}")
+
+            # ── Built-in: transfer_call ──────────────────
+            if function_name == 'transfer_call':
+                dest = arguments.get('destination_number', '')
+                reason = arguments.get('reason', 'transfer requested')
+                logger.info(f"Transfer call requested: {dest} (reason: {reason})")
+
+                if not dest:
+                    return json.dumps({'success': False, 'error': 'No destination number provided'})
+
+                # Give the AI's transfer announcement time to play (3s)
+                await asyncio.sleep(3.0)
+
+                result = await transfer_call_via_telnyx(call_control_id, dest, caller_to)
+                if result['success']:
+                    logger.info(f"Call transferred to {dest}")
+                    return json.dumps({'success': True, 'message': f'Call is being transferred to {dest}'})
+                else:
+                    logger.warning(f"Transfer failed: {result}")
+                    return json.dumps({'success': False, 'error': result.get('error', f"HTTP {result.get('status')}")})
 
             # ── Webhook tools ──────────────────────
             webhook_url = tool_url_map.get(function_name)
