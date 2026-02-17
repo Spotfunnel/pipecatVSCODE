@@ -1,0 +1,15 @@
+# Core framework
+pipecat-ai[silero,openai]==0.0.85
+fastapi==0.109.0
+uvicorn==0.40.0
+
+# Webhook support
+aiohttp==3.13.3
+
+# Environment
+python-dotenv==1.0.1
+
+# Audio / ML (pulled by pipecat but pinning for reproducibility)
+numpy==1.26.4
+scipy==1.14.1
+websockets==15.0.1

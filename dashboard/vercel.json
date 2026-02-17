@@ -1,0 +1,19 @@
+{
+    "buildCommand": "npx vite build",
+    "outputDirectory": "dist",
+    "framework": "vite",
+    "rewrites": [
+        {
+            "source": "/api/realtime/token",
+            "destination": "/api/realtime/token"
+        },
+        {
+            "source": "/api/webhook/test",
+            "destination": "/api/webhook/test"
+        },
+        {
+            "source": "/(.*)",
+            "destination": "/index.html"
+        }
+    ]
+}
