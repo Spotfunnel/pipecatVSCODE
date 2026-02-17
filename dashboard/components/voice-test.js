@@ -149,10 +149,18 @@ export function renderVoiceTest(getSystemPrompt, getVoice) {
                 // 4. Set up remote audio playback (AI voice output)
                 audioEl = document.createElement('audio');
                 audioEl.autoplay = true;
-                document.body.appendChild(audioEl); // Must be in DOM for some browsers
+                document.body.appendChild(audioEl);
+
                 pc.ontrack = (e) => {
-                    console.log('[VoiceTest] Got remote audio track');
-                    audioEl.srcObject = e.streams[0];
+                    console.log('[VoiceTest] Got remote audio track:', e.track.kind);
+                    // Ensure the stream is attached correctly
+                    const stream = e.streams[0] || new MediaStream([e.track]);
+                    audioEl.srcObject = stream;
+
+                    // Explicit play to handle autoplay restrictions
+                    audioEl.play().catch(err => {
+                        console.warn('[VoiceTest] Audio playback failed (autoplay restriction):', err);
+                    });
                 };
 
                 // 5. Add local audio track

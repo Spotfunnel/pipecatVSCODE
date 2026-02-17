@@ -160,7 +160,7 @@ export function renderOnboarding(container) {
       </div>
 
       <div class="prompt-section">
-        <div class="prompt-section-header">✍️ Prompt Editor</div>
+        <label class="prompt-section-header" for="systemPrompt">✍️ Prompt Editor</label>
         <textarea class="form-textarea" id="systemPrompt" rows="14" placeholder="Describe who your agent is, what it should do, and any rules it should follow...">${agentData.systemPrompt}</textarea>
       </div>
 
