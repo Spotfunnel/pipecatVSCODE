@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame, EndFrame
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -384,21 +385,24 @@ async def websocket_endpoint(websocket: WebSocket):
         session_properties = SessionProperties(
             instructions=system_prompt,
             voice=voice,
+            tools=tools,
         )
-        logger.info(f"SessionProperties configured with voice='{voice}', instructions length={len(system_prompt)}")
+        logger.info(f"SessionProperties configured with voice='{voice}', instructions length={len(system_prompt)}, tools={len(tools)}")
 
         llm = OpenAIRealtimeLLMService(
             api_key=os.getenv("OPENAI_API_KEY"),
             model="gpt-realtime",
             session_properties=session_properties,
         )
-        logger.info(f"Registered {len(tools)} function-calling tools")
 
         # ── Handle function calls from the AI ────────────────────
-        @llm.event_handler("on_function_call")
-        async def on_function_call(llm_service, function_name, arguments, call_id):
-            """Called when the AI invokes a function-calling tool."""
-            logger.info(f"Function call: {function_name}({json.dumps(arguments)}) call_id={call_id}")
+        # Use register_function(None, handler) as a catch-all for all tool calls.
+        # The handler receives FunctionCallParams and must call result_callback().
+        async def handle_function_call(params: FunctionCallParams):
+            """Catch-all function call handler for all tools."""
+            function_name = params.function_name
+            arguments = params.arguments
+            logger.info(f"Function call: {function_name}({json.dumps(dict(arguments))})")
 
             # ── Built-in: transfer_call ──────────────────
             if function_name == 'transfer_call':
@@ -407,7 +411,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.info(f"Transfer call requested: {dest} (reason: {reason})")
 
                 if not dest:
-                    return json.dumps({'success': False, 'error': 'No destination number provided'})
+                    await params.result_callback({'success': False, 'error': 'No destination number provided'})
+                    return
 
                 # Give the AI's transfer announcement time to play (3s)
                 await asyncio.sleep(3.0)
@@ -415,10 +420,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 result = await transfer_call_via_telnyx(call_control_id, dest, caller_to)
                 if result['success']:
                     logger.info(f"Call transferred to {dest}")
-                    return json.dumps({'success': True, 'message': f'Call is being transferred to {dest}'})
+                    await params.result_callback({'success': True, 'message': f'Call is being transferred to {dest}'})
                 else:
                     logger.warning(f"Transfer failed: {result}")
-                    return json.dumps({'success': False, 'error': result.get('error', f"HTTP {result.get('status')}")})
+                    await params.result_callback({'success': False, 'error': result.get('error', f"HTTP {result.get('status')}")})
+                return
 
             # ── Webhook tools ──────────────────────
             webhook_url = tool_url_map.get(function_name)
@@ -426,20 +432,23 @@ async def websocket_endpoint(websocket: WebSocket):
                 result = await fire_webhook(webhook_url, arguments)
                 if result['success']:
                     logger.info(f"Webhook {function_name} succeeded: HTTP {result['status']}")
-                    return json.dumps({"success": True, "message": "Webhook delivered successfully"})
+                    await params.result_callback({"success": True, "message": "Webhook delivered successfully"})
                 else:
                     logger.warning(f"Webhook {function_name} failed: {result.get('error', result.get('status'))}")
-                    return json.dumps({"success": False, "error": result.get('error', f"HTTP {result.get('status')}")})
+                    await params.result_callback({"success": False, "error": result.get('error', f"HTTP {result.get('status')}")})
             else:
                 logger.warning(f"No webhook URL for function: {function_name}")
-                return json.dumps({"success": False, "error": f"No webhook configured for {function_name}"})
+                await params.result_callback({"success": False, "error": f"No webhook configured for {function_name}"})
 
+        # Register catch-all function handler (None = handles all function names)
+        llm.register_function(None, handle_function_call)
+        logger.info(f"Registered catch-all function handler for {len(tools)} tools")
         # LLMContext: Use a "user" message to trigger the initial greeting.
         # The system instructions are already set via SessionProperties above.
-        # Per pipecat's official example, LLMContext gets a user prompt, NOT a system message.
+        # NOTE: Do NOT pass tools here — LLMContext requires ToolsSchema objects,
+        # not raw lists. Tools are provided via SessionProperties or register_function.
         context = LLMContext(
             [{"role": "user", "content": "Please greet the caller now."}],
-            tools,
         )
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
