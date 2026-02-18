@@ -21,11 +21,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
-from pipecat.services.openai.realtime.events import (
-    SessionProperties,
-    AudioConfiguration,
-    AudioOutput,
-)
+from pipecat.services.openai.realtime.events import SessionProperties
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -448,8 +444,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(
                     params=VADParams(
-                        threshold=0.65,      # Higher = less sensitive to background noise (was 0.55, caused false interruptions)
-                        min_volume=0.7,      # Higher = ignores more quiet sounds that trigger false speech detection (was 0.6)
+                        threshold=0.55,      # Speech detection sensitivity — proven optimal
+                        min_volume=0.6,      # Minimum volume for speech detection
                         stop_secs=0.7,       # 700ms max latency as requested
                     )
                 ),
@@ -467,28 +463,26 @@ async def websocket_endpoint(websocket: WebSocket):
         voice = agent_config.get('voice', 'coral')
         logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
 
-        # ── Configure OpenAI Realtime Session ─────────────────────
-        # Audio pipeline: Telnyx 8kHz PCMU ↔ pipecat (16kHz PCM) ↔ OpenAI (24kHz PCM)
+        # ── Configure OpenAI Realtime LLM ───────────────────────
+        # CRITICAL: Do NOT use AudioConfiguration here!
+        # The walkthrough (conv c9e1da17) explicitly states:
+        #   "Setting any AudioConfiguration appears to change how OpenAI encodes
+        #   its audio output, causing sample rate or format mismatches with
+        #   Pipecat's internal resampling chain. The result is crackling,
+        #   off-pitch voice, and lost word endings."
         #
-        # IMPORTANT: Do NOT set format=PCMUAudioFormat() here!
-        # Pipecat's internal pipeline always works with linear PCM.
-        # Setting PCMU output causes double-encoding (screechy laser sounds).
-        # The TelnyxFrameSerializer handles PCM↔PCMU conversion correctly.
-        #
-        # Voice MUST go through AudioOutput (not a direct kwarg).
-        # Noise reduction helps with background noise crackling.
+        # Pass instructions + tools via SessionProperties (no audio config).
+        # Pass voice directly to OpenAIRealtimeLLMService.
         session_properties = SessionProperties(
             instructions=system_prompt,
             tools=tools,
-            audio=AudioConfiguration(
-                output=AudioOutput(voice=voice),
-            ),
         )
-        logger.info(f"SessionProperties configured with voice='{voice}' (via AudioOutput), instructions length={len(system_prompt)}, tools={len(tools)}")
+        logger.info(f"SessionProperties: instructions length={len(system_prompt)}, tools={len(tools)}, voice='{voice}' (direct kwarg)")
 
         llm = OpenAIRealtimeLLMService(
             api_key=os.getenv("OPENAI_API_KEY"),
             model="gpt-realtime",
+            voice=voice,
             session_properties=session_properties,
         )
 
