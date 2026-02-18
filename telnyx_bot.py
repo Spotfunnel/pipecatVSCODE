@@ -43,7 +43,7 @@ load_dotenv(override=True)
 # This makes configs persistent across deploys and supports multi-agent routing.
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres.lxsxwrunbmoiayhtexiz:Walkergewert01@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
+    "postgresql://postgres.kpvyguhkyotkfrwtcdtg:Walkergewert0!@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres"
 )
 
 # Connection pool — initialized on startup

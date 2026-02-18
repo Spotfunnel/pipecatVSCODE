@@ -5,7 +5,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
-    || 'https://lxsxwrunbmoiayhtexiz.supabase.co';
+    || 'https://kpvyguhkyotkfrwtcdtg.supabase.co';
 
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY
     || '';
