@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system deps for audio processing
+# Install system deps for audio processing and asyncpg compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    python3-dev \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
