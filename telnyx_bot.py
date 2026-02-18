@@ -16,13 +16,6 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
-from pipecat.services.openai.realtime.events import (
-    AudioConfiguration,
-    AudioInput,
-    InputAudioTranscription,
-    SemanticTurnDetection,
-    SessionProperties,
-)
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -360,8 +353,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(
                     params=VADParams(
-                        threshold=0.5,       # Default sensitivity
-                        min_volume=0.3,      # Lower for telephony (phone audio is quieter)
+                        threshold=0.55,      # Sweet spot for speech detection
+                        min_volume=0.6,      # Prevents quiet bleed-through from triggering interruptions
                         stop_secs=0.7,       # 700ms max latency as requested
                     )
                 ),
@@ -379,22 +372,17 @@ async def websocket_endpoint(websocket: WebSocket):
         voice = agent_config.get('voice', 'coral')
         logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
 
-        # Configure OpenAI Realtime session for optimal quality
-        session_properties = SessionProperties(
-            audio=AudioConfiguration(
-                input=AudioInput(
-                    transcription=InputAudioTranscription(),
-                    turn_detection=SemanticTurnDetection(),
-                )
-            ),
-            instructions=system_prompt,
-        )
-
+        # IMPORTANT: Do NOT use SessionProperties with AudioConfiguration!
+        # Previous testing proved it causes crackling/pitch issues because it
+        # changes how OpenAI encodes audio, creating mismatches with Pipecat's
+        # internal resampling chain. Also do NOT enable SemanticTurnDetection
+        # while Silero VAD is active — dual VAD creates chopped audio.
+        # Instead, pass instructions directly to OpenAIRealtimeLLMService.
         llm_kwargs = {
             'api_key': os.getenv("OPENAI_API_KEY"),
             'model': "gpt-realtime",
             'voice': voice,
-            'session_properties': session_properties,
+            'instructions': system_prompt,
         }
 
         # Add tools (webhooks + built-in transfer_call)
