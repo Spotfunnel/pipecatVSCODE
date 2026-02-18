@@ -343,23 +343,25 @@ export function renderVoiceTest(getSystemPrompt, getVoice, getWebhooks) {
                                     appendTranscript('webhook', `👋 Ending call (${args.reason || 'conversation complete'})`);
                                     setStatus('👋 Call ending...', 'var(--text-tertiary)');
 
-                                    // Send tool result so the AI knows it worked
+                                    // Send tool result and ask AI to say goodbye
                                     if (dc && dc.readyState === 'open') {
                                         dc.send(JSON.stringify({
                                             type: 'conversation.item.create',
                                             item: {
                                                 type: 'function_call_output',
                                                 call_id: callId,
-                                                output: JSON.stringify({ success: true, message: 'Call will end after goodbye' }),
+                                                output: JSON.stringify({ success: true, message: 'Say your final goodbye now. The call will disconnect shortly after.' }),
                                             },
                                         }));
+                                        // Trigger AI to speak its goodbye
+                                        dc.send(JSON.stringify({ type: 'response.create' }));
                                     }
 
-                                    // Wait 2.5s for goodbye audio to finish playing, then disconnect
+                                    // Wait 5s for AI to say goodbye and audio to finish, then disconnect
                                     setTimeout(() => {
                                         cleanup();
                                         setStatus('✅ Call ended gracefully. Click to start again.', 'var(--text-tertiary)');
-                                    }, 2500);
+                                    }, 5000);
                                     break;
                                 }
 

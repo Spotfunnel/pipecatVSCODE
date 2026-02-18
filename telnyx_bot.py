@@ -350,13 +350,20 @@ class AgentConfigPayload(PydanticBaseModel):
 
 @app.on_event("startup")
 async def startup():
-    """Initialize database connection pool on server start."""
+    """Initialize database connection pool and preload models on server start."""
     try:
         await get_db_pool()
         logger.info("✓ Database pool ready")
     except Exception as e:
         logger.error(f"✗ Failed to connect to database: {e}")
         # Don't crash — the bot can still work with DEFAULT_AGENT_CONFIG
+
+    # Preload Silero VAD model so first call doesn't pay cold-start penalty
+    try:
+        _warmup_vad = SileroVADAnalyzer(params=VADParams())
+        logger.info("✓ Silero VAD model preloaded")
+    except Exception as e:
+        logger.warning(f"VAD preload failed (non-fatal): {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -542,8 +549,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(
                     params=VADParams(
-                        threshold=0.55,      # Speech detection sensitivity — proven optimal
-                        min_volume=0.6,      # Minimum volume for speech detection
+                        threshold=0.5,       # Slightly more sensitive to catch all speech
+                        min_volume=0.3,      # Lower floor — 0.6 was cutting audio causing ticks
                         stop_secs=0.7,       # 700ms max latency as requested
                     )
                 ),
