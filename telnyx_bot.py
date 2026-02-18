@@ -432,9 +432,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.warning(f"No webhook URL for function: {function_name}")
                 return json.dumps({"success": False, "error": f"No webhook configured for {function_name}"})
 
-        context = LLMContext([
-            {"role": "system", "content": system_prompt}
-        ])
+        # NOTE: System prompt is already set via 'instructions' on OpenAIRealtimeLLMService.
+        # Do NOT put it in LLMContext too — that causes the AI to re-greet ~40s into the call
+        # when the context aggregator syncs with the Realtime session.
+        context = LLMContext()
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
         # Build pipeline: input -> user context -> LLM -> output -> assistant context
