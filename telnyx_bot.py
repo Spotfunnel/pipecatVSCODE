@@ -21,7 +21,14 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
-from pipecat.services.openai.realtime.events import SessionProperties, AudioConfiguration, AudioOutput
+from pipecat.services.openai.realtime.events import (
+    SessionProperties,
+    AudioConfiguration,
+    AudioInput,
+    AudioOutput,
+    InputAudioNoiseReduction,
+    PCMUAudioFormat,
+)
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -464,19 +471,27 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
 
         # ── Configure OpenAI Realtime Session ─────────────────────
-        # IMPORTANT: Voice goes through AudioConfiguration, NOT as direct kwarg.
-        # The new SessionProperties API (pipecat.services.openai.realtime.events)
-        # does NOT have a direct 'voice' field — it's silently ignored.
-        # Voice MUST be set via: AudioConfiguration(output=AudioOutput(voice=...))
+        # Audio pipeline: Telnyx 8kHz PCMU ↔ pipecat ↔ OpenAI Realtime
         #
-        # DO NOT set audio format (input or output) — that changes encoding
-        # and causes crackling/pitch issues with Telnyx PCMU pipeline.
-        # DO NOT add SemanticTurnDetection — it conflicts with Silero VAD.
+        # CRITICAL for audio quality:
+        # 1. Output format = PCMU — OpenAI encodes to G.711 μ-law natively,
+        #    eliminating the 24kHz→8kHz resampling + lin2ulaw conversion
+        #    that caused crackling artifacts in the pipecat serializer.
+        # 2. Input format = PCMU — matches what Telnyx sends, no conversion.
+        # 3. Noise reduction = near_field — reduces background noise before AI.
+        # 4. Turn detection: left to pipecat's Silero VAD (not overridden here).
         session_properties = SessionProperties(
             instructions=system_prompt,
             tools=tools,
             audio=AudioConfiguration(
-                output=AudioOutput(voice=voice),
+                input=AudioInput(
+                    format=PCMUAudioFormat(),
+                    noise_reduction=InputAudioNoiseReduction(type="near_field"),
+                ),
+                output=AudioOutput(
+                    voice=voice,
+                    format=PCMUAudioFormat(),
+                ),
             ),
         )
         logger.info(f"SessionProperties configured with voice='{voice}' (via AudioOutput), instructions length={len(system_prompt)}, tools={len(tools)}")
