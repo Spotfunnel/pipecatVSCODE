@@ -4,6 +4,7 @@ import sys
 import json
 import logging
 import aiohttp
+import asyncpg
 
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -37,48 +38,96 @@ logger = logging.getLogger(__name__)
 
 load_dotenv(override=True)
 
-# ── Configuration Files ──────────────────────────────────────────────────────
-# Load webhook config from webhooks.json and agent config from agent_config.json
-# Both are exported from the dashboard and COPY'd into the Docker image
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-WEBHOOKS_FILE = os.path.join(APP_DIR, 'webhooks.json')
-AGENT_CONFIG_FILE = os.path.join(APP_DIR, 'agent_config.json')
+# ── Database Configuration ────────────────────────────────────────────────────
+# Agent configs are stored in Supabase Postgres (voice_agents table).
+# This makes configs persistent across deploys and supports multi-agent routing.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres.lxsxwrunbmoiayhtexiz:Walkergewert01@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
+)
+
+# Connection pool — initialized on startup
+db_pool: asyncpg.Pool = None
+
+DEFAULT_AGENT_CONFIG = {
+    'name': 'AI Assistant',
+    'voice': 'sage',
+    'systemPrompt': 'You are a helpful and professional AI assistant talking over the phone. Always respond in English. Be warm and conversational.',
+    'description': '',
+    'vadThreshold': 0.55,
+    'stopSecs': 0.7,
+    'webhooks': [],
+}
 
 
-def load_webhooks():
-    """Load webhook configuration from webhooks.json."""
-    try:
-        with open(WEBHOOKS_FILE, 'r') as f:
-            webhooks = json.load(f)
-            logger.info(f"Loaded {len(webhooks)} webhooks from {WEBHOOKS_FILE}")
-            return webhooks
-    except FileNotFoundError:
-        logger.info(f"No webhooks.json found at {WEBHOOKS_FILE} — no webhooks configured")
-        return []
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in {WEBHOOKS_FILE}: {e}")
-        return []
+async def get_db_pool():
+    """Get or create the database connection pool."""
+    global db_pool
+    if db_pool is None:
+        db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+        logger.info("Database connection pool created")
+    return db_pool
 
 
-def load_agent_config():
-    """Load agent configuration (prompt, voice, etc.) from agent_config.json."""
-    default_config = {
-        'name': 'AI Assistant',
-        'voice': 'coral',
-        'systemPrompt': 'You are a helpful and professional AI assistant talking over the phone. Always respond in English. Be warm and conversational.',
-        'description': '',
+async def load_agent_by_phone(phone_number: str) -> dict:
+    """Load agent configuration from the database by phone number.
+    
+    Falls back to the first active agent if no phone-specific match is found.
+    Returns a dict with name, voice, systemPrompt, webhooks, etc.
+    """
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Try exact phone number match first
+        if phone_number:
+            row = await conn.fetchrow(
+                "SELECT * FROM voice_agents WHERE phone_number = $1 AND active = true LIMIT 1",
+                phone_number,
+            )
+            if row:
+                logger.info(f"Found agent '{row['name']}' for phone {phone_number}")
+                return _row_to_config(row)
+        
+        # Fallback: first active agent (or any agent with empty phone_number)
+        row = await conn.fetchrow(
+            "SELECT * FROM voice_agents WHERE active = true ORDER BY created_at ASC LIMIT 1"
+        )
+        if row:
+            logger.info(f"Using default active agent '{row['name']}' (no phone match for {phone_number})")
+            return _row_to_config(row)
+    
+    logger.warning(f"No agent found in database — using hardcoded defaults")
+    return DEFAULT_AGENT_CONFIG.copy()
+
+
+async def load_all_agents() -> list:
+    """Load all agents from the database."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM voice_agents ORDER BY created_at ASC")
+        return [_row_to_config(row) for row in rows]
+
+
+def _row_to_config(row) -> dict:
+    """Convert a database row to an agent config dict."""
+    webhooks = row['webhooks'] if row['webhooks'] else []
+    # webhooks is stored as JSONB, asyncpg returns it as a string
+    if isinstance(webhooks, str):
+        try:
+            webhooks = json.loads(webhooks)
+        except json.JSONDecodeError:
+            webhooks = []
+    return {
+        'id': str(row['id']),
+        'name': row['name'],
+        'description': row['description'] or '',
+        'systemPrompt': row['system_prompt'],
+        'voice': row['voice'] or 'sage',
+        'vadThreshold': row['vad_threshold'] or 0.55,
+        'stopSecs': row['stop_secs'] or 0.7,
+        'phoneNumber': row['phone_number'] or '',
+        'webhooks': webhooks,
+        'active': row['active'],
     }
-    try:
-        with open(AGENT_CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            logger.info(f"Loaded agent config from {AGENT_CONFIG_FILE}: name={config.get('name')}, voice={config.get('voice')}")
-            return {**default_config, **config}
-    except FileNotFoundError:
-        logger.warning(f"No agent_config.json found at {AGENT_CONFIG_FILE} — using defaults")
-        return default_config
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in {AGENT_CONFIG_FILE}: {e}")
-        return default_config
 
 
 def build_tools_from_webhooks(webhooks):
@@ -299,49 +348,96 @@ class AgentConfigPayload(PydanticBaseModel):
     webhooks: Optional[List[Dict[str, Any]]] = []
     active: Optional[bool] = True
 
+@app.on_event("startup")
+async def startup():
+    """Initialize database connection pool on server start."""
+    try:
+        await get_db_pool()
+        logger.info("✓ Database pool ready")
+    except Exception as e:
+        logger.error(f"✗ Failed to connect to database: {e}")
+        # Don't crash — the bot can still work with DEFAULT_AGENT_CONFIG
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Close database connection pool on server shutdown."""
+    global db_pool
+    if db_pool:
+        await db_pool.close()
+        logger.info("Database pool closed")
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    db_ok = False
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+            db_ok = True
+    except Exception:
+        pass
+    return {"status": "ok", "database": "connected" if db_ok else "disconnected"}
 
 
 @app.post("/api/agent-config")
 async def update_agent_config(payload: AgentConfigPayload):
-    """Receive agent config from dashboard and write to agent_config.json + webhooks.json."""
+    """Receive agent config from dashboard and upsert into the voice_agents database table."""
     try:
         # Extract voice from phoneConfig
         voice = 'sage'
         vad_threshold = 0.55
         stop_secs = 0.7
+        phone_number = ''
         if payload.phoneConfig:
             voice = payload.phoneConfig.voice or 'sage'
             vad_threshold = payload.phoneConfig.vadThreshold or 0.55
             stop_secs = payload.phoneConfig.stopSecs or 0.7
+            phone_number = payload.phoneConfig.phoneNumber or ''
 
-        # Write agent_config.json
-        agent_config = {
-            'name': payload.name or 'AI Assistant',
-            'voice': voice,
-            'systemPrompt': payload.systemPrompt or '',
-            'description': payload.description or '',
-            'vadThreshold': vad_threshold,
-            'stopSecs': stop_secs,
-        }
-        with open(AGENT_CONFIG_FILE, 'w') as f:
-            json.dump(agent_config, f, indent=2)
-        logger.info(f"Updated agent_config.json: name={agent_config['name']}, voice={voice}")
+        webhooks = json.dumps(payload.webhooks or [])
+        name = payload.name or 'AI Assistant'
+        system_prompt = payload.systemPrompt or ''
+        description = payload.description or ''
+        active = payload.active if payload.active is not None else True
 
-        # Write webhooks.json
-        webhooks = payload.webhooks or []
-        with open(WEBHOOKS_FILE, 'w') as f:
-            json.dump(webhooks, f, indent=2)
-        logger.info(f"Updated webhooks.json: {len(webhooks)} webhooks")
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            # Upsert: match by phone_number if provided, otherwise by name
+            if phone_number:
+                existing = await conn.fetchrow(
+                    "SELECT id FROM voice_agents WHERE phone_number = $1 LIMIT 1",
+                    phone_number,
+                )
+            else:
+                existing = await conn.fetchrow(
+                    "SELECT id FROM voice_agents WHERE name = $1 LIMIT 1",
+                    name,
+                )
+
+            if existing:
+                await conn.execute("""
+                    UPDATE voice_agents
+                    SET name=$1, description=$2, system_prompt=$3, voice=$4,
+                        vad_threshold=$5, stop_secs=$6, phone_number=$7,
+                        webhooks=$8::jsonb, active=$9, updated_at=now()
+                    WHERE id=$10
+                """, name, description, system_prompt, voice, vad_threshold,
+                    stop_secs, phone_number, webhooks, active, existing['id'])
+                logger.info(f"Updated agent '{name}' in database (id={existing['id']})")
+            else:
+                await conn.execute("""
+                    INSERT INTO voice_agents (name, description, system_prompt, voice,
+                        vad_threshold, stop_secs, phone_number, webhooks, active)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+                """, name, description, system_prompt, voice, vad_threshold,
+                    stop_secs, phone_number, webhooks, active)
+                logger.info(f"Created new agent '{name}' in database")
 
         return JSONResponse({
             'success': True,
-            'agent': agent_config['name'],
+            'agent': name,
             'voice': voice,
-            'webhooks': len(webhooks),
+            'webhooks': len(payload.webhooks or []),
         })
     except Exception as e:
         logger.error(f"Failed to update agent config: {e}", exc_info=True)
@@ -350,14 +446,16 @@ async def update_agent_config(payload: AgentConfigPayload):
 
 @app.get("/api/agent-config")
 async def get_agent_config():
-    """Return current agent config + webhooks for the dashboard to read."""
+    """Return all agent configs from the database."""
     try:
-        agent_config = load_agent_config()
-        webhooks = load_webhooks()
+        agents = await load_all_agents()
+        # For backwards compatibility, also return the first active agent as 'config'
+        active = next((a for a in agents if a.get('active')), agents[0] if agents else DEFAULT_AGENT_CONFIG)
         return JSONResponse({
             'success': True,
-            'config': agent_config,
-            'webhooks': webhooks,
+            'config': active,
+            'agents': agents,
+            'webhooks': active.get('webhooks', []),
         })
     except Exception as e:
         logger.error(f"Failed to read agent config: {e}", exc_info=True)
@@ -453,15 +551,14 @@ async def websocket_endpoint(websocket: WebSocket):
             )
         )
 
-        # ── Load webhook config & build tools ───────────────────
-        webhooks = load_webhooks()
+        # ── Load agent config from database by phone number ─────
+        agent_config = await load_agent_by_phone(caller_to)
+        webhooks = agent_config.get('webhooks', [])
         tools, tool_url_map = build_tools_from_webhooks(webhooks)
 
-        # Build LLM config from agent_config.json
-        agent_config = load_agent_config()
         system_prompt = agent_config['systemPrompt']
-        voice = agent_config.get('voice', 'coral')
-        logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
+        voice = agent_config.get('voice', 'sage')
+        logger.info(f"Using agent '{agent_config.get('name')}' for phone={caller_to}, voice='{voice}', prompt length={len(system_prompt)}")
 
         # ── Configure OpenAI Realtime LLM ───────────────────────
         # CRITICAL: Do NOT use AudioConfiguration here!
