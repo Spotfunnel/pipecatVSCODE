@@ -24,10 +24,7 @@ from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.services.openai.realtime.events import (
     SessionProperties,
     AudioConfiguration,
-    AudioInput,
     AudioOutput,
-    InputAudioNoiseReduction,
-    PCMUAudioFormat,
 )
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
@@ -471,27 +468,20 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
 
         # ── Configure OpenAI Realtime Session ─────────────────────
-        # Audio pipeline: Telnyx 8kHz PCMU ↔ pipecat ↔ OpenAI Realtime
+        # Audio pipeline: Telnyx 8kHz PCMU ↔ pipecat (16kHz PCM) ↔ OpenAI (24kHz PCM)
         #
-        # CRITICAL for audio quality:
-        # 1. Output format = PCMU — OpenAI encodes to G.711 μ-law natively,
-        #    eliminating the 24kHz→8kHz resampling + lin2ulaw conversion
-        #    that caused crackling artifacts in the pipecat serializer.
-        # 2. Input format = PCMU — matches what Telnyx sends, no conversion.
-        # 3. Noise reduction = near_field — reduces background noise before AI.
-        # 4. Turn detection: left to pipecat's Silero VAD (not overridden here).
+        # IMPORTANT: Do NOT set format=PCMUAudioFormat() here!
+        # Pipecat's internal pipeline always works with linear PCM.
+        # Setting PCMU output causes double-encoding (screechy laser sounds).
+        # The TelnyxFrameSerializer handles PCM↔PCMU conversion correctly.
+        #
+        # Voice MUST go through AudioOutput (not a direct kwarg).
+        # Noise reduction helps with background noise crackling.
         session_properties = SessionProperties(
             instructions=system_prompt,
             tools=tools,
             audio=AudioConfiguration(
-                input=AudioInput(
-                    format=PCMUAudioFormat(),
-                    noise_reduction=InputAudioNoiseReduction(type="near_field"),
-                ),
-                output=AudioOutput(
-                    voice=voice,
-                    format=PCMUAudioFormat(),
-                ),
+                output=AudioOutput(voice=voice),
             ),
         )
         logger.info(f"SessionProperties configured with voice='{voice}' (via AudioOutput), instructions length={len(system_prompt)}, tools={len(tools)}")
