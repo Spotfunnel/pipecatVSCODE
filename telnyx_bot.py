@@ -444,8 +444,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(
                     params=VADParams(
-                        threshold=0.55,      # Sweet spot for speech detection
-                        min_volume=0.6,      # Prevents quiet bleed-through from triggering interruptions
+                        threshold=0.65,      # Higher = less sensitive to background noise (was 0.55, caused false interruptions)
+                        min_volume=0.7,      # Higher = ignores more quiet sounds that trigger false speech detection (was 0.6)
                         stop_secs=0.7,       # 700ms max latency as requested
                     )
                 ),
