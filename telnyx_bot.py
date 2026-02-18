@@ -16,6 +16,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
+from pipecat.services.openai.realtime.events import SessionProperties
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -372,25 +373,26 @@ async def websocket_endpoint(websocket: WebSocket):
         voice = agent_config.get('voice', 'coral')
         logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
 
-        # IMPORTANT: Do NOT use SessionProperties with AudioConfiguration!
-        # Previous testing proved it causes crackling/pitch issues because it
-        # changes how OpenAI encodes audio, creating mismatches with Pipecat's
-        # internal resampling chain. Also do NOT enable SemanticTurnDetection
-        # while Silero VAD is active — dual VAD creates chopped audio.
-        # Instead, pass instructions directly to OpenAIRealtimeLLMService.
-        llm_kwargs = {
-            'api_key': os.getenv("OPENAI_API_KEY"),
-            'model': "gpt-realtime",
-            'voice': voice,
-            'instructions': system_prompt,
-        }
+        # ── Configure OpenAI Realtime Session ─────────────────────
+        # IMPORTANT: instructions and voice MUST go in SessionProperties.
+        # They are NOT direct constructor kwargs on OpenAIRealtimeLLMService.
+        # Passing them as kwargs silently fails (swallowed by **kwargs).
+        #
+        # DO NOT add AudioConfiguration here — it changes OpenAI's audio
+        # encoding and causes crackling/pitch issues with Telnyx PCMU pipeline.
+        # DO NOT add SemanticTurnDetection — it conflicts with Silero VAD.
+        session_properties = SessionProperties(
+            instructions=system_prompt,
+            voice=voice,
+        )
+        logger.info(f"SessionProperties configured with voice='{voice}', instructions length={len(system_prompt)}")
 
-        # Add tools (webhooks + built-in transfer_call)
-        llm_kwargs['tools'] = tools
+        llm = OpenAIRealtimeLLMService(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-realtime",
+            session_properties=session_properties,
+        )
         logger.info(f"Registered {len(tools)} function-calling tools")
-
-        # OpenAI Realtime LLM
-        llm = OpenAIRealtimeLLMService(**llm_kwargs)
 
         # ── Handle function calls from the AI ────────────────────
         @llm.event_handler("on_function_call")
@@ -432,12 +434,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.warning(f"No webhook URL for function: {function_name}")
                 return json.dumps({"success": False, "error": f"No webhook configured for {function_name}"})
 
-        # System prompt MUST be in LLMContext — this is what pipecat sends to OpenAI
-        # when LLMRunFrame fires. Without it, the model has no instructions at all.
-        # Keep it in 'instructions' too as a belt-and-suspenders approach.
-        context = LLMContext([
-            {"role": "system", "content": system_prompt}
-        ])
+        # LLMContext: Use a "user" message to trigger the initial greeting.
+        # The system instructions are already set via SessionProperties above.
+        # Per pipecat's official example, LLMContext gets a user prompt, NOT a system message.
+        context = LLMContext(
+            [{"role": "user", "content": "Please greet the caller now."}],
+            tools,
+        )
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
         # Build pipeline: input -> user context -> LLM -> output -> assistant context
