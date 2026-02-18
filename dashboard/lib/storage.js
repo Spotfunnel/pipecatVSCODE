@@ -1,160 +1,187 @@
-// ── localStorage CRUD for Voice AI Agents ─────────────────
-// All mutations sync the active agent to the bot server automatically.
+// ── Supabase CRUD for Voice AI Agents ─────────────────────
+// All operations read/write directly to Supabase Postgres.
+// Railway bot reads from the same table at call time — no proxy needed.
 
-const STORAGE_KEY = 'voiceai_agents';
+import { supabase } from './supabase.js';
 
-// Bot server URL — falls back to production Railway domain
-const BOT_SERVER_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BOT_SERVER_URL)
-    || 'https://bot.spotfunnelmail.com';
+const TABLE = 'voice_agents';
 
-function generateId() {
-    return 'agent_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// ── Helpers ─────────────────────────────────────────────
+
+/** Map a database row (snake_case) → dashboard agent object (camelCase) */
+function rowToAgent(row) {
+    return {
+        id: row.id,
+        name: row.name || '',
+        description: row.description || '',
+        systemPrompt: row.system_prompt || '',
+        webhooks: row.webhooks || [],
+        phoneConfig: {
+            phoneNumber: row.phone_number || '',
+            voice: row.voice || 'sage',
+            vadThreshold: row.vad_threshold ?? 0.55,
+            stopSecs: row.stop_secs ?? 0.7,
+        },
+        active: row.active ?? true,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+    };
 }
 
-export function getAllAgents() {
-    try {
-        const data = localStorage.getItem(STORAGE_KEY);
-        return data ? JSON.parse(data) : [];
-    } catch {
+/** Map a dashboard agent object → database columns */
+function agentToRow(agent) {
+    const row = {};
+    if (agent.name !== undefined) row.name = agent.name;
+    if (agent.description !== undefined) row.description = agent.description;
+    if (agent.systemPrompt !== undefined) row.system_prompt = agent.systemPrompt;
+    if (agent.webhooks !== undefined) row.webhooks = agent.webhooks;
+    if (agent.active !== undefined) row.active = agent.active;
+    if (agent.phoneConfig) {
+        if (agent.phoneConfig.phoneNumber !== undefined) row.phone_number = agent.phoneConfig.phoneNumber;
+        if (agent.phoneConfig.voice !== undefined) row.voice = agent.phoneConfig.voice;
+        if (agent.phoneConfig.vadThreshold !== undefined) row.vad_threshold = agent.phoneConfig.vadThreshold;
+        if (agent.phoneConfig.stopSecs !== undefined) row.stop_secs = agent.phoneConfig.stopSecs;
+    }
+    return row;
+}
+
+// ── CRUD Operations ─────────────────────────────────────
+
+/**
+ * Fetch all agents from the database.
+ * @returns {Promise<Array>} Array of agent objects
+ */
+export async function getAllAgents() {
+    const { data, error } = await supabase
+        .from(TABLE)
+        .select('*')
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        console.error('[storage] Failed to fetch agents:', error.message);
         return [];
     }
-}
-
-function saveAll(agents) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(agents));
+    return (data || []).map(rowToAgent);
 }
 
 /**
- * Sync the active agent's config to the bot server.
- * Sends systemPrompt, name, voice, webhooks, etc. so the bot
- * uses the latest config on the next call — no redeployment needed.
+ * Get a single agent by its database ID.
+ * @param {string|number} id
+ * @returns {Promise<Object|null>}
  */
-export async function syncToServer(agent) {
-    if (!agent) {
-        console.warn('[sync] No agent provided, skipping sync');
-        return { success: false, error: 'No agent' };
-    }
-    if (!agent.active) {
-        console.log('[sync] Agent is inactive, skipping sync');
-        return { success: false, error: 'Agent inactive' };
-    }
+export async function getAgent(id) {
+    const { data, error } = await supabase
+        .from(TABLE)
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    const payload = {
-        name: agent.name,
-        description: agent.description || '',
-        systemPrompt: agent.systemPrompt || '',
-        phoneConfig: {
-            phoneNumber: agent.phoneConfig?.phoneNumber || '',
-            voice: agent.phoneConfig?.voice || 'sage',
-            vadThreshold: agent.phoneConfig?.vadThreshold ?? 0.55,
-            stopSecs: agent.phoneConfig?.stopSecs ?? 0.7,
-        },
-        webhooks: agent.webhooks || [],
-        active: agent.active,
-    };
-
-    try {
-        console.log(`[sync] Syncing agent "${agent.name}" to ${BOT_SERVER_URL}/api/agent-config`);
-        const resp = await fetch(`${BOT_SERVER_URL}/api/agent-config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-        const data = await resp.json();
-        if (data.success) {
-            console.log(`[sync] ✓ Synced "${agent.name}" — voice=${data.voice}, webhooks=${data.webhooks}`);
-        } else {
-            console.error('[sync] ✗ Server returned error:', data.error);
-        }
-        return data;
-    } catch (err) {
-        console.error('[sync] ✗ Failed to sync:', err.message);
-        return { success: false, error: err.message };
+    if (error) {
+        console.error('[storage] Failed to fetch agent:', error.message);
+        return null;
     }
+    return data ? rowToAgent(data) : null;
 }
 
 /**
- * Find and sync the currently active agent.
- * Called after mutations that might change which agent is active.
+ * Create a new agent in the database.
+ * @param {Object} agentData — camelCase dashboard format
+ * @returns {Promise<Object|null>} The created agent
  */
-export async function syncActiveAgent() {
-    const agents = getAllAgents();
-    const active = agents.find(a => a.active);
-    if (active) {
-        return syncToServer(active);
-    } else {
-        console.log('[sync] No active agent to sync');
-        return { success: false, error: 'No active agent' };
-    }
-}
-
-export function getAgent(id) {
-    return getAllAgents().find(a => a.id === id) || null;
-}
-
-export function createAgent(agentData) {
-    const agents = getAllAgents();
-    const now = new Date().toISOString();
-    const agent = {
-        id: generateId(),
+export async function createAgent(agentData) {
+    const row = {
         name: agentData.name || 'Untitled Agent',
         description: agentData.description || '',
-        systemPrompt: agentData.systemPrompt || '',
+        system_prompt: agentData.systemPrompt || '',
         webhooks: agentData.webhooks || [],
-        phoneConfig: {
-            phoneNumber: agentData.phoneConfig?.phoneNumber || '',
-            voice: agentData.phoneConfig?.voice || 'sage',
-            vadThreshold: agentData.phoneConfig?.vadThreshold ?? 0.55,
-            stopSecs: agentData.phoneConfig?.stopSecs ?? 0.7,
-        },
+        phone_number: agentData.phoneConfig?.phoneNumber || '',
+        voice: agentData.phoneConfig?.voice || 'sage',
+        vad_threshold: agentData.phoneConfig?.vadThreshold ?? 0.55,
+        stop_secs: agentData.phoneConfig?.stopSecs ?? 0.7,
         active: true,
-        createdAt: now,
-        updatedAt: now,
     };
-    agents.push(agent);
-    saveAll(agents);
-    // Auto-sync to bot server
-    syncToServer(agent).catch(err => console.error('[sync] Background sync failed:', err));
-    return agent;
-}
 
-export function updateAgent(id, updates) {
-    const agents = getAllAgents();
-    const idx = agents.findIndex(a => a.id === id);
-    if (idx === -1) return null;
-    agents[idx] = {
-        ...agents[idx],
-        ...updates,
-        updatedAt: new Date().toISOString(),
-    };
-    saveAll(agents);
-    // Auto-sync if this agent is active
-    if (agents[idx].active) {
-        syncToServer(agents[idx]).catch(err => console.error('[sync] Background sync failed:', err));
+    const { data, error } = await supabase
+        .from(TABLE)
+        .insert(row)
+        .select()
+        .single();
+
+    if (error) {
+        console.error('[storage] Failed to create agent:', error.message);
+        return null;
     }
-    return agents[idx];
+
+    console.log(`[storage] ✓ Created agent "${data.name}" (id=${data.id})`);
+    return rowToAgent(data);
 }
 
-export function deleteAgent(id) {
-    const agents = getAllAgents().filter(a => a.id !== id);
-    saveAll(agents);
-    // Sync the next active agent (if any)
-    syncActiveAgent().catch(err => console.error('[sync] Background sync failed:', err));
-}
+/**
+ * Update an existing agent.
+ * @param {string|number} id
+ * @param {Object} updates — camelCase partial update
+ * @returns {Promise<Object|null>}
+ */
+export async function updateAgent(id, updates) {
+    const row = agentToRow(updates);
+    row.updated_at = new Date().toISOString();
 
-export function toggleAgent(id) {
-    const agents = getAllAgents();
-    const agent = agents.find(a => a.id === id);
-    if (agent) {
-        agent.active = !agent.active;
-        agent.updatedAt = new Date().toISOString();
-        saveAll(agents);
-        // Sync: if toggled ON, sync this agent; if toggled OFF, sync next active
-        if (agent.active) {
-            syncToServer(agent).catch(err => console.error('[sync] Background sync failed:', err));
-        } else {
-            syncActiveAgent().catch(err => console.error('[sync] Background sync failed:', err));
-        }
+    const { data, error } = await supabase
+        .from(TABLE)
+        .update(row)
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        console.error('[storage] Failed to update agent:', error.message);
+        return null;
     }
-    return agent;
+
+    console.log(`[storage] ✓ Updated agent "${data.name}" (id=${data.id})`);
+    return rowToAgent(data);
+}
+
+/**
+ * Delete an agent from the database.
+ * @param {string|number} id
+ */
+export async function deleteAgent(id) {
+    const { error } = await supabase
+        .from(TABLE)
+        .delete()
+        .eq('id', id);
+
+    if (error) {
+        console.error('[storage] Failed to delete agent:', error.message);
+    } else {
+        console.log(`[storage] ✓ Deleted agent id=${id}`);
+    }
+}
+
+/**
+ * Toggle an agent's active status.
+ * @param {string|number} id
+ * @returns {Promise<Object|null>} The updated agent
+ */
+export async function toggleAgent(id) {
+    // Fetch current state
+    const current = await getAgent(id);
+    if (!current) return null;
+
+    const newActive = !current.active;
+    const { data, error } = await supabase
+        .from(TABLE)
+        .update({ active: newActive, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        console.error('[storage] Failed to toggle agent:', error.message);
+        return null;
+    }
+
+    console.log(`[storage] ✓ Toggled agent "${data.name}" → ${newActive ? 'active' : 'inactive'}`);
+    return rowToAgent(data);
 }

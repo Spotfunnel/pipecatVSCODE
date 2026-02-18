@@ -6,78 +6,81 @@ import { navigate } from '../lib/router.js';
 
 export function renderOverview(container) {
 
-    function render() {
-        const agents = getAllAgents();
+  async function render() {
+    // Show loading state
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:var(--space-3xl);color:var(--text-secondary);"><div class="spinner"></div><span style="margin-left:var(--space-md);">Loading agents…</span></div>';
 
-        const page = document.createElement('div');
-        page.className = 'page-container';
+    const agents = await getAllAgents();
 
-        // Header
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2xl);';
-        header.innerHTML = `
+    const page = document.createElement('div');
+    page.className = 'page-container';
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2xl);';
+    header.innerHTML = `
       <div>
         <h1 style="font-size:var(--font-3xl);font-weight:800;background:var(--gradient-accent);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:-0.025em;">Your Agents</h1>
         <p style="color:var(--text-secondary);font-size:var(--font-base);margin-top:4px;">${agents.length} agent${agents.length !== 1 ? 's' : ''} configured</p>
       </div>
     `;
 
-        const createBtn = document.createElement('button');
-        createBtn.className = 'btn btn-primary';
-        createBtn.innerHTML = '+ New Agent';
-        createBtn.addEventListener('click', () => navigate('/onboarding'));
-        header.appendChild(createBtn);
-        page.appendChild(header);
+    const createBtn = document.createElement('button');
+    createBtn.className = 'btn btn-primary';
+    createBtn.innerHTML = '+ New Agent';
+    createBtn.addEventListener('click', () => navigate('/onboarding'));
+    header.appendChild(createBtn);
+    page.appendChild(header);
 
-        if (agents.length === 0) {
-            // Empty state
-            const empty = document.createElement('div');
-            empty.className = 'glass-card empty-state';
-            empty.innerHTML = `
+    if (agents.length === 0) {
+      // Empty state
+      const empty = document.createElement('div');
+      empty.className = 'glass-card empty-state';
+      empty.innerHTML = `
         <div class="empty-state-icon">🤖</div>
         <h3>No agents yet</h3>
         <p>Create your first voice AI agent to get started. It only takes a few minutes.</p>
       `;
-            const startBtn = document.createElement('button');
-            startBtn.className = 'btn btn-primary btn-lg';
-            startBtn.innerHTML = '🚀 Create Your First Agent';
-            startBtn.addEventListener('click', () => navigate('/onboarding'));
-            empty.appendChild(startBtn);
-            page.appendChild(empty);
-        } else {
-            // Agent grid
-            const grid = document.createElement('div');
-            grid.className = 'agent-grid';
+      const startBtn = document.createElement('button');
+      startBtn.className = 'btn btn-primary btn-lg';
+      startBtn.innerHTML = '🚀 Create Your First Agent';
+      startBtn.addEventListener('click', () => navigate('/onboarding'));
+      empty.appendChild(startBtn);
+      page.appendChild(empty);
+    } else {
+      // Agent grid
+      const grid = document.createElement('div');
+      grid.className = 'agent-grid';
 
-            agents.forEach(agent => {
-                const card = renderAgentCard(agent, {
-                    onEdit: (a) => showEditModal(a),
-                    onToggle: (a) => {
-                        toggleAgent(a.id);
-                        render();
-                    },
-                    onDelete: (a) => showDeleteConfirm(a),
-                });
-                grid.appendChild(card);
-            });
+      agents.forEach(agent => {
+        const card = renderAgentCard(agent, {
+          onEdit: (a) => showEditModal(a),
+          onToggle: async (a) => {
+            await toggleAgent(a.id);
+            render();
+          },
+          onDelete: (a) => showDeleteConfirm(a),
+        });
+        grid.appendChild(card);
+      });
 
-            page.appendChild(grid);
-        }
-
-        container.innerHTML = '';
-        container.appendChild(page);
+      page.appendChild(grid);
     }
 
-    // ── Edit Modal ──────────────────────────────────────
-    function showEditModal(agent) {
-        const overlay = document.createElement('div');
-        overlay.className = 'modal-overlay';
+    container.innerHTML = '';
+    container.appendChild(page);
+  }
 
-        let activeTab = 'name';
-        const editData = { ...agent, phoneConfig: { ...agent.phoneConfig }, webhooks: [...(agent.webhooks || [])] };
+  // ── Edit Modal ──────────────────────────────────────
+  function showEditModal(agent) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
 
-        function renderModal() {
-            overlay.innerHTML = `
+    let activeTab = 'name';
+    const editData = { ...agent, phoneConfig: { ...agent.phoneConfig }, webhooks: [...(agent.webhooks || [])] };
+
+    function renderModal() {
+      overlay.innerHTML = `
         <div class="modal">
           <div class="modal-header">
             <h2>Edit Agent</h2>
@@ -97,38 +100,40 @@ export function renderOverview(container) {
         </div>
       `;
 
-            const body = overlay.querySelector('#modalBody');
-            renderTabContent(body);
+      const body = overlay.querySelector('#modalBody');
+      renderTabContent(body);
 
-            // Tab clicks
-            overlay.querySelectorAll('.modal-tab').forEach(tab => {
-                tab.addEventListener('click', () => {
-                    activeTab = tab.dataset.tab;
-                    renderModal();
-                });
-            });
+      // Tab clicks
+      overlay.querySelectorAll('.modal-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          activeTab = tab.dataset.tab;
+          renderModal();
+        });
+      });
 
-            // Close
-            overlay.querySelector('#modalClose')?.addEventListener('click', () => overlay.remove());
-            overlay.querySelector('#cancelBtn')?.addEventListener('click', () => overlay.remove());
+      // Close
+      overlay.querySelector('#modalClose')?.addEventListener('click', () => overlay.remove());
+      overlay.querySelector('#cancelBtn')?.addEventListener('click', () => overlay.remove());
 
-            // Save
-            overlay.querySelector('#saveBtn')?.addEventListener('click', () => {
-                updateAgent(agent.id, editData);
-                overlay.remove();
-                render();
-            });
+      // Save
+      overlay.querySelector('#saveBtn')?.addEventListener('click', async () => {
+        const saveBtn = overlay.querySelector('#saveBtn');
+        if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+        await updateAgent(agent.id, editData);
+        overlay.remove();
+        render();
+      });
 
-            // Click outside
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) overlay.remove();
-            });
-        }
+      // Click outside
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) overlay.remove();
+      });
+    }
 
-        function renderTabContent(body) {
-            switch (activeTab) {
-                case 'name':
-                    body.innerHTML = `
+    function renderTabContent(body) {
+      switch (activeTab) {
+        case 'name':
+          body.innerHTML = `
             <div class="form-group">
               <label class="form-label">Agent Name</label>
               <input class="form-input" type="text" id="editName" value="${escapeAttr(editData.name)}" />
@@ -138,30 +143,30 @@ export function renderOverview(container) {
               <input class="form-input" type="text" id="editDesc" value="${escapeAttr(editData.description || '')}" />
             </div>
           `;
-                    body.querySelector('#editName')?.addEventListener('input', (e) => { editData.name = e.target.value; });
-                    body.querySelector('#editDesc')?.addEventListener('input', (e) => { editData.description = e.target.value; });
-                    break;
+          body.querySelector('#editName')?.addEventListener('input', (e) => { editData.name = e.target.value; });
+          body.querySelector('#editDesc')?.addEventListener('input', (e) => { editData.description = e.target.value; });
+          break;
 
-                case 'prompt':
-                    body.innerHTML = `
+        case 'prompt':
+          body.innerHTML = `
             <div class="form-group">
               <label class="form-label">System Prompt</label>
               <textarea class="form-textarea" id="editPrompt" rows="16">${editData.systemPrompt || ''}</textarea>
             </div>
           `;
-                    body.querySelector('#editPrompt')?.addEventListener('input', (e) => { editData.systemPrompt = e.target.value; });
-                    break;
+          body.querySelector('#editPrompt')?.addEventListener('input', (e) => { editData.systemPrompt = e.target.value; });
+          break;
 
-                case 'webhooks':
-                    body.innerHTML = '<div id="editWebhookMount"></div>';
-                    const mount = body.querySelector('#editWebhookMount');
-                    if (mount) {
-                        const { renderWebhookBuilder } = window._webhookBuilder || {};
-                        // Inline a simple version for the modal
-                        editData.webhooks.forEach((wh, i) => {
-                            const item = document.createElement('div');
-                            item.className = 'webhook-item mb-md';
-                            item.innerHTML = `
+        case 'webhooks':
+          body.innerHTML = '<div id="editWebhookMount"></div>';
+          const mount = body.querySelector('#editWebhookMount');
+          if (mount) {
+            const { renderWebhookBuilder } = window._webhookBuilder || {};
+            // Inline a simple version for the modal
+            editData.webhooks.forEach((wh, i) => {
+              const item = document.createElement('div');
+              item.className = 'webhook-item mb-md';
+              item.innerHTML = `
                 <div class="webhook-fields">
                   <div class="form-group">
                     <label class="form-label">Name</label>
@@ -173,24 +178,24 @@ export function renderOverview(container) {
                   </div>
                 </div>
               `;
-                            item.querySelectorAll('input').forEach(input => {
-                                input.addEventListener('input', (e) => {
-                                    const idx = parseInt(e.target.dataset.idx);
-                                    const field = e.target.dataset.field;
-                                    editData.webhooks[idx][field] = e.target.value;
-                                });
-                            });
-                            mount.appendChild(item);
-                        });
+              item.querySelectorAll('input').forEach(input => {
+                input.addEventListener('input', (e) => {
+                  const idx = parseInt(e.target.dataset.idx);
+                  const field = e.target.dataset.field;
+                  editData.webhooks[idx][field] = e.target.value;
+                });
+              });
+              mount.appendChild(item);
+            });
 
-                        if (editData.webhooks.length === 0) {
-                            mount.innerHTML = '<p style="color:var(--text-tertiary);text-align:center;padding:var(--space-xl);">No webhooks configured. Add them via the onboarding wizard.</p>';
-                        }
-                    }
-                    break;
+            if (editData.webhooks.length === 0) {
+              mount.innerHTML = '<p style="color:var(--text-tertiary);text-align:center;padding:var(--space-xl);">No webhooks configured. Add them via the onboarding wizard.</p>';
+            }
+          }
+          break;
 
-                case 'phone':
-                    body.innerHTML = `
+        case 'phone':
+          body.innerHTML = `
             <div class="form-group">
               <label class="form-label">Phone Number</label>
               <input class="form-input" type="tel" id="editPhone" value="${editData.phoneConfig?.phoneNumber || ''}" />
@@ -199,8 +204,8 @@ export function renderOverview(container) {
               <label class="form-label">Voice</label>
               <select class="form-select" id="editVoice">
                 ${['coral', 'alloy', 'ash', 'ballad', 'echo', 'sage', 'shimmer', 'verse'].map(v =>
-                        `<option value="${v}" ${editData.phoneConfig?.voice === v ? 'selected' : ''}>${v}</option>`
-                    ).join('')}
+            `<option value="${v}" ${editData.phoneConfig?.voice === v ? 'selected' : ''}>${v}</option>`
+          ).join('')}
               </select>
             </div>
             <div class="form-group">
@@ -218,31 +223,31 @@ export function renderOverview(container) {
               </div>
             </div>
           `;
-                    body.querySelector('#editPhone')?.addEventListener('input', (e) => { editData.phoneConfig.phoneNumber = e.target.value; });
-                    body.querySelector('#editVoice')?.addEventListener('change', (e) => { editData.phoneConfig.voice = e.target.value; });
-                    body.querySelector('#editVad')?.addEventListener('input', (e) => {
-                        editData.phoneConfig.vadThreshold = parseFloat(e.target.value);
-                        const val = body.querySelector('#editVadVal');
-                        if (val) val.textContent = e.target.value;
-                    });
-                    body.querySelector('#editLatency')?.addEventListener('input', (e) => {
-                        editData.phoneConfig.stopSecs = parseFloat(e.target.value);
-                        const val = body.querySelector('#editLatVal');
-                        if (val) val.textContent = e.target.value + 's';
-                    });
-                    break;
-            }
-        }
-
-        renderModal();
-        document.body.appendChild(overlay);
+          body.querySelector('#editPhone')?.addEventListener('input', (e) => { editData.phoneConfig.phoneNumber = e.target.value; });
+          body.querySelector('#editVoice')?.addEventListener('change', (e) => { editData.phoneConfig.voice = e.target.value; });
+          body.querySelector('#editVad')?.addEventListener('input', (e) => {
+            editData.phoneConfig.vadThreshold = parseFloat(e.target.value);
+            const val = body.querySelector('#editVadVal');
+            if (val) val.textContent = e.target.value;
+          });
+          body.querySelector('#editLatency')?.addEventListener('input', (e) => {
+            editData.phoneConfig.stopSecs = parseFloat(e.target.value);
+            const val = body.querySelector('#editLatVal');
+            if (val) val.textContent = e.target.value + 's';
+          });
+          break;
+      }
     }
 
-    // ── Delete Confirm ──────────────────────────────────
-    function showDeleteConfirm(agent) {
-        const overlay = document.createElement('div');
-        overlay.className = 'modal-overlay confirm-dialog';
-        overlay.innerHTML = `
+    renderModal();
+    document.body.appendChild(overlay);
+  }
+
+  // ── Delete Confirm ──────────────────────────────────
+  function showDeleteConfirm(agent) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay confirm-dialog';
+    overlay.innerHTML = `
       <div class="modal" style="max-width:420px;text-align:center;">
         <div class="modal-body" style="padding:var(--space-2xl);">
           <div class="confirm-icon">⚠️</div>
@@ -256,26 +261,28 @@ export function renderOverview(container) {
       </div>
     `;
 
-        overlay.querySelector('#cancelDelete')?.addEventListener('click', () => overlay.remove());
-        overlay.querySelector('#confirmDelete')?.addEventListener('click', () => {
-            deleteAgent(agent.id);
-            overlay.remove();
-            render();
-        });
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#cancelDelete')?.addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#confirmDelete')?.addEventListener('click', async () => {
+      const delBtn = overlay.querySelector('#confirmDelete');
+      if (delBtn) { delBtn.textContent = 'Deleting…'; delBtn.disabled = true; }
+      await deleteAgent(agent.id);
+      overlay.remove();
+      render();
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
-        document.body.appendChild(overlay);
-    }
+    document.body.appendChild(overlay);
+  }
 
-    render();
+  render();
 }
 
 function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 function escapeAttr(str) {
-    return (str || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return (str || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

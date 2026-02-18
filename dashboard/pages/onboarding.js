@@ -330,15 +330,16 @@ export function renderOnboarding(container) {
       });
 
       el.querySelector('#backBtn')?.addEventListener('click', () => { currentStep = 3; render(); });
-      el.querySelector('#createBtn')?.addEventListener('click', () => {
-        const agent = createAgent(agentData);
-        // Brief success animation
+      el.querySelector('#createBtn')?.addEventListener('click', async () => {
         const btn = el.querySelector('#createBtn');
-        if (btn) {
-          btn.textContent = '✓ Agent Created!';
-          btn.disabled = true;
+        if (btn) { btn.textContent = 'Creating…'; btn.disabled = true; }
+        const agent = await createAgent(agentData);
+        if (agent) {
+          if (btn) btn.textContent = '✓ Agent Created!';
+          setTimeout(() => navigate('/'), 800);
+        } else {
+          if (btn) { btn.textContent = 'Error — Retry'; btn.disabled = false; }
         }
-        setTimeout(() => navigate('/'), 800);
       });
     });
   }
