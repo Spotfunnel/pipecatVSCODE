@@ -4,8 +4,12 @@ import sys
 import json
 import logging
 import aiohttp
+
 from fastapi import FastAPI, WebSocket, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel as PydanticBaseModel
+from typing import Optional, List, Dict, Any
 from uvicorn import Config, Server
 from dotenv import load_dotenv
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -17,7 +21,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
-from pipecat.services.openai.realtime.events import SessionProperties
+from pipecat.services.openai.realtime.events import SessionProperties, AudioConfiguration, AudioOutput
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -270,9 +274,94 @@ async def transfer_call_via_telnyx(call_control_id, destination_number, from_num
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI()
 
+# CORS: Allow dashboard (Vercel) to call bot server (Railway)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TODO: Lock down to dashboard domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Pydantic models for config API ───────────────────────────────────────────
+class PhoneConfig(PydanticBaseModel):
+    phoneNumber: Optional[str] = ''
+    voice: Optional[str] = 'sage'
+    vadThreshold: Optional[float] = 0.55
+    stopSecs: Optional[float] = 0.7
+
+class AgentConfigPayload(PydanticBaseModel):
+    name: Optional[str] = 'AI Assistant'
+    description: Optional[str] = ''
+    systemPrompt: Optional[str] = ''
+    phoneConfig: Optional[PhoneConfig] = None
+    webhooks: Optional[List[Dict[str, Any]]] = []
+    active: Optional[bool] = True
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/api/agent-config")
+async def update_agent_config(payload: AgentConfigPayload):
+    """Receive agent config from dashboard and write to agent_config.json + webhooks.json."""
+    try:
+        # Extract voice from phoneConfig
+        voice = 'sage'
+        vad_threshold = 0.55
+        stop_secs = 0.7
+        if payload.phoneConfig:
+            voice = payload.phoneConfig.voice or 'sage'
+            vad_threshold = payload.phoneConfig.vadThreshold or 0.55
+            stop_secs = payload.phoneConfig.stopSecs or 0.7
+
+        # Write agent_config.json
+        agent_config = {
+            'name': payload.name or 'AI Assistant',
+            'voice': voice,
+            'systemPrompt': payload.systemPrompt or '',
+            'description': payload.description or '',
+            'vadThreshold': vad_threshold,
+            'stopSecs': stop_secs,
+        }
+        with open(AGENT_CONFIG_FILE, 'w') as f:
+            json.dump(agent_config, f, indent=2)
+        logger.info(f"Updated agent_config.json: name={agent_config['name']}, voice={voice}")
+
+        # Write webhooks.json
+        webhooks = payload.webhooks or []
+        with open(WEBHOOKS_FILE, 'w') as f:
+            json.dump(webhooks, f, indent=2)
+        logger.info(f"Updated webhooks.json: {len(webhooks)} webhooks")
+
+        return JSONResponse({
+            'success': True,
+            'agent': agent_config['name'],
+            'voice': voice,
+            'webhooks': len(webhooks),
+        })
+    except Exception as e:
+        logger.error(f"Failed to update agent config: {e}", exc_info=True)
+        return JSONResponse({'success': False, 'error': str(e)}, status_code=500)
+
+
+@app.get("/api/agent-config")
+async def get_agent_config():
+    """Return current agent config + webhooks for the dashboard to read."""
+    try:
+        agent_config = load_agent_config()
+        webhooks = load_webhooks()
+        return JSONResponse({
+            'success': True,
+            'config': agent_config,
+            'webhooks': webhooks,
+        })
+    except Exception as e:
+        logger.error(f"Failed to read agent config: {e}", exc_info=True)
+        return JSONResponse({'success': False, 'error': str(e)}, status_code=500)
 
 
 @app.api_route("/", methods=["GET", "POST"])
@@ -375,19 +464,22 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Using agent '{agent_config.get('name')}' with voice='{voice}', prompt length={len(system_prompt)}")
 
         # ── Configure OpenAI Realtime Session ─────────────────────
-        # IMPORTANT: instructions and voice MUST go in SessionProperties.
-        # They are NOT direct constructor kwargs on OpenAIRealtimeLLMService.
-        # Passing them as kwargs silently fails (swallowed by **kwargs).
+        # IMPORTANT: Voice goes through AudioConfiguration, NOT as direct kwarg.
+        # The new SessionProperties API (pipecat.services.openai.realtime.events)
+        # does NOT have a direct 'voice' field — it's silently ignored.
+        # Voice MUST be set via: AudioConfiguration(output=AudioOutput(voice=...))
         #
-        # DO NOT add AudioConfiguration here — it changes OpenAI's audio
-        # encoding and causes crackling/pitch issues with Telnyx PCMU pipeline.
+        # DO NOT set audio format (input or output) — that changes encoding
+        # and causes crackling/pitch issues with Telnyx PCMU pipeline.
         # DO NOT add SemanticTurnDetection — it conflicts with Silero VAD.
         session_properties = SessionProperties(
             instructions=system_prompt,
-            voice=voice,
             tools=tools,
+            audio=AudioConfiguration(
+                output=AudioOutput(voice=voice),
+            ),
         )
-        logger.info(f"SessionProperties configured with voice='{voice}', instructions length={len(system_prompt)}, tools={len(tools)}")
+        logger.info(f"SessionProperties configured with voice='{voice}' (via AudioOutput), instructions length={len(system_prompt)}, tools={len(tools)}")
 
         llm = OpenAIRealtimeLLMService(
             api_key=os.getenv("OPENAI_API_KEY"),
