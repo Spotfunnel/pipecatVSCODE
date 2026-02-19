@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Roxby — Meet Agent</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        #logo {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #logo img { width: 100%; height: 100%; }
+        /* Debug log hidden from screen share */
+        #status { display: none; }
+    </style>
+</head>
+<body>
+    <div id="logo"><img src="/logo.svg" alt="Roxby" /></div>
+    <div id="status"></div>
+
+    <script>
+    (async function() {
+        const statusEl = document.getElementById('status');
+        const lines = [];
+
+        function log(msg, cls) {
+            console.log('[MeetAgent]', msg);
+            lines.push({ msg, cls: cls || '' });
+            render();
+        }
+
+        function render() {
+            statusEl.innerHTML = lines.map((l, i) => {
+                const c = i === lines.length - 1 ? (l.cls || 'bright') : (l.cls || 'dim');
+                return `<div class="${c}">${l.msg}</div>`;
+            }).join('');
+        }
+
+        // Write status to Supabase so we can debug from the dashboard
+        async function writeStatus(supabase, sid, status, extra) {
+            try {
+                const update = { status };
+                if (extra) update.config = extra;
+                await supabase.from('demo_sessions').update(update).eq('id', sid);
+            } catch (e) {
+                console.error('[MeetAgent] Status write failed:', e);
+            }
+        }
+
+        // ── Config ──────────────────────────────────────────
+        const SUPABASE_URL = 'https://kpvyguhkyotkfrwtcdtg.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwdnlndWhreW90a2Zyd3RjZHRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MTYzMTAsImV4cCI6MjA4Njk5MjMxMH0.zVRG74Zmw6SxxZgTp-rp4nLUMDA6QNKqo0EEFyGYNK8';
+
+        let pc = null;
+        let dc = null;
+        let sb = null;
+        let sid = null;
+
+        try {
+            // ── Step 1: Parse session ID ────────────────────
+            const params = new URLSearchParams(window.location.search);
+            sid = params.get('sessionId');
+            if (!sid) throw new Error('No sessionId in URL');
+            log('1/8 Session ID: ' + sid);
+
+            // ── Step 2: Connect to Supabase ─────────────────
+            sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            log('2/8 Supabase connected');
+
+            const { data: session, error: dbErr } = await sb
+                .from('demo_sessions')
+                .select('*')
+                .eq('id', sid)
+                .single();
+
+            if (dbErr || !session) throw new Error('Session fetch failed: ' + (dbErr?.message || 'no data'));
+
+            const config = session.config;
+            log('2/8 Config: voice=' + config.voice + ' prompt=' + (config.systemPrompt || '').substring(0, 40) + '...');
+            await writeStatus(sb, sid, 'page_loaded');
+
+            // ── Step 3: Get OpenAI token ────────────────────
+            log('3/8 Requesting OpenAI ephemeral token...');
+            const tokenBody = {
+                model: 'gpt-realtime',
+                voice: config.voice || 'coral',
+                instructions: config.systemPrompt || 'You are a helpful assistant.',
+            };
+            if (config.tools && config.tools.length > 0) {
+                tokenBody.tools = config.tools;
+            }
+
+            const tokenResp = await fetch('/api/realtime/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(tokenBody),
+            });
+            const tokenData = await tokenResp.json();
+            if (!tokenResp.ok) throw new Error('Token error: ' + (tokenData.error || tokenResp.status));
+            if (!tokenData.token) throw new Error('No token in response');
+
+            log('3/8 Token acquired: ' + tokenData.token.substring(0, 10) + '...');
+            await writeStatus(sb, sid, 'token_acquired');
+
+            // ── Step 4: getUserMedia (meeting audio) ────────
+            log('4/8 Requesting microphone (meeting audio)...');
+            let localStream;
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
+                });
+            } catch (micErr) {
+                throw new Error('getUserMedia failed: ' + micErr.message);
+            }
+            log('4/8 Audio captured: ' + localStream.getAudioTracks().length + ' track(s)');
+            await writeStatus(sb, sid, 'audio_captured');
+
+            // ── Step 5: RTCPeerConnection ───────────────────
+            log('5/8 Creating RTCPeerConnection...');
+            pc = new RTCPeerConnection();
+
+            // Audio output element — Recall.ai captures this and streams to meeting
+            const audioEl = document.createElement('audio');
+            audioEl.autoplay = true;
+            audioEl.volume = 1.0;
+            document.body.appendChild(audioEl);
+
+            pc.ontrack = (e) => {
+                log('5/8 Got remote audio track from OpenAI', 'bright');
+                audioEl.srcObject = e.streams[0];
+            };
+
+            pc.onconnectionstatechange = () => {
+                log('WebRTC state: ' + pc.connectionState, 'dim');
+                if (pc.connectionState === 'connected') {
+                    writeStatus(sb, sid, 'webrtc_connected');
+                }
+                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    log('WebRTC connection lost!', 'error');
+                    writeStatus(sb, sid, 'webrtc_' + pc.connectionState);
+                }
+            };
+
+            // Add meeting audio as input to OpenAI
+            pc.addTrack(localStream.getTracks()[0]);
+            log('5/8 Local audio track added to peer connection');
+
+            // ── Step 6: Data channel ────────────────────────
+            log('6/8 Creating data channel...');
+            dc = pc.createDataChannel('oai-events');
+
+            dc.onopen = () => {
+                log('6/8 Data channel open — triggering AI greeting', 'bright');
+                dc.send(JSON.stringify({ type: 'response.create' }));
+                writeStatus(sb, sid, 'active');
+            };
+
+            dc.onclose = () => {
+                log('Data channel closed', 'dim');
+                writeStatus(sb, sid, 'dc_closed');
+            };
+
+            dc.onerror = (e) => {
+                log('Data channel error: ' + e.message, 'error');
+            };
+
+            dc.onmessage = async (e) => {
+                try {
+                    const event = JSON.parse(e.data);
+
+                    switch (event.type) {
+                        case 'session.created':
+                            log('Session created — voice: ' + (event.session?.audio?.output?.voice || '?'), 'bright');
+                            break;
+
+                        case 'response.audio_transcript.done':
+                            if (event.transcript) {
+                                log('Agent: ' + event.transcript.substring(0, 100), 'bright');
+                            }
+                            break;
+
+                        case 'conversation.item.input_audio_transcription.completed':
+                            if (event.transcript) {
+                                log('User: ' + event.transcript.substring(0, 100));
+                            }
+                            break;
+
+                        case 'response.audio.delta':
+                            // AI is speaking — audio plays through audioEl
+                            break;
+
+                        case 'response.done':
+                            if (event.response?.status === 'failed') {
+                                log('Response FAILED: ' + (event.response?.status_details?.error?.message || 'unknown'), 'error');
+                            }
+                            break;
+
+                        case 'response.function_call_arguments.done': {
+                            const toolName = event.name;
+                            const callId = event.call_id;
+                            log('Tool: ' + toolName);
+
+                            // Send success result back for any tool
+                            if (dc && dc.readyState === 'open') {
+                                dc.send(JSON.stringify({
+                                    type: 'conversation.item.create',
+                                    item: {
+                                        type: 'function_call_output',
+                                        call_id: callId,
+                                        output: JSON.stringify({ success: true, message: 'Action completed.' }),
+                                    },
+                                }));
+                                dc.send(JSON.stringify({ type: 'response.create' }));
+                            }
+                            break;
+                        }
+
+                        case 'error':
+                            log('API error: ' + (event.error?.message || JSON.stringify(event.error)), 'error');
+                            break;
+                    }
+                } catch (err) {
+                    console.error('[MeetAgent] Event parse error:', err);
+                }
+            };
+
+            // ── Step 7: SDP exchange ────────────────────────
+            log('7/8 Creating SDP offer...');
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            log('7/8 Sending offer to OpenAI...');
+            await writeStatus(sb, sid, 'sdp_exchange');
+
+            const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+                method: 'POST',
+                body: offer.sdp,
+                headers: {
+                    'Authorization': 'Bearer ' + tokenData.token,
+                    'Content-Type': 'application/sdp',
+                },
+            });
+
+            if (!sdpResp.ok) {
+                const errText = await sdpResp.text();
+                throw new Error('SDP failed (' + sdpResp.status + '): ' + errText.substring(0, 200));
+            }
+
+            const answerSdp = await sdpResp.text();
+            await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+            // ── Step 8: Connected ───────────────────────────
+            log('8/8 WebRTC connected — Roxby is live!', 'bright');
+            await writeStatus(sb, sid, 'webrtc_connected');
+
+        } catch (err) {
+            log('FATAL: ' + err.message, 'error');
+            console.error(err);
+            if (sb && sid) {
+                // Store the error message in status for debugging
+                await writeStatus(sb, sid, 'error:' + err.message.substring(0, 100));
+            }
+        }
+    })();
+    </script>
+</body>
+</html>

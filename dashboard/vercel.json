@@ -12,6 +12,18 @@
             "destination": "/api/webhook/test"
         },
         {
+            "source": "/api/recall/launch",
+            "destination": "/api/recall/launch"
+        },
+        {
+            "source": "/api/recall/status",
+            "destination": "/api/recall/status"
+        },
+        {
+            "source": "/api/recall/stop",
+            "destination": "/api/recall/stop"
+        },
+        {
             "source": "/(.*)",
             "destination": "/index.html"
         }

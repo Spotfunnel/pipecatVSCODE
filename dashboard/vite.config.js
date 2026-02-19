@@ -5,15 +5,17 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Load OPENAI_API_KEY from parent .env
-function loadApiKey() {
+// Load an env var from parent .env
+function loadEnvVar(name) {
     const envPath = path.resolve(__dirname, '..', '.env');
     try {
         const envContent = fs.readFileSync(envPath, 'utf-8');
-        const match = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
+        const match = envContent.match(new RegExp(`^${name}=(.+)$`, 'm'));
         return match ? match[1].trim() : null;
     } catch { return null; }
 }
+
+function loadApiKey() { return loadEnvVar('OPENAI_API_KEY'); }
 
 export default defineConfig({
     server: {
@@ -188,6 +190,211 @@ export default defineConfig({
                         res.statusCode = 500;
                         res.setHeader('Content-Type', 'application/json');
                         res.end(JSON.stringify({ error: err.message, success: false }));
+                    }
+                });
+
+                // ── Recall.ai API routes (dev only) ─────────────────────
+
+                // Helper: parse JSON body from request
+                function parseBody(req) {
+                    return new Promise((resolve) => {
+                        let data = '';
+                        req.on('data', c => data += c);
+                        req.on('end', () => {
+                            try { resolve(JSON.parse(data)); }
+                            catch { resolve({}); }
+                        });
+                    });
+                }
+
+                // POST /api/recall/launch
+                server.middlewares.use('/api/recall/launch', async (req, res) => {
+                    if (req.method !== 'POST') {
+                        res.statusCode = 405;
+                        res.end(JSON.stringify({ error: 'Method not allowed' }));
+                        return;
+                    }
+
+                    const recallKey = loadEnvVar('RECALL_API_KEY');
+                    if (!recallKey) {
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: 'RECALL_API_KEY not found in ../.env' }));
+                        return;
+                    }
+
+                    try {
+                        const body = await parseBody(req);
+                        const { meetUrl, systemPrompt, voice, tools } = body;
+
+                        if (!meetUrl) {
+                            res.statusCode = 400;
+                            res.setHeader('Content-Type', 'application/json');
+                            res.end(JSON.stringify({ error: 'Missing meetUrl' }));
+                            return;
+                        }
+
+                        // Save session to Supabase
+                        const { createClient } = await import('@supabase/supabase-js');
+                        const supabase = createClient(
+                            'https://kpvyguhkyotkfrwtcdtg.supabase.co',
+                            loadEnvVar('VITE_SUPABASE_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwdnlndWhreW90a2Zyd3RjZHRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MTYzMTAsImV4cCI6MjA4Njk5MjMxMH0.zVRG74Zmw6SxxZgTp-rp4nLUMDA6QNKqo0EEFyGYNK8'
+                        );
+
+                        const sessionConfig = {
+                            systemPrompt: systemPrompt || 'You are a helpful assistant.',
+                            voice: voice || 'coral',
+                            tools: (tools || []).map(t => { const { _webhookUrl, _webhookId, ...c } = t; return c; }),
+                        };
+
+                        const { data: session, error: dbError } = await supabase
+                            .from('demo_sessions')
+                            .insert({ config: sessionConfig, meet_url: meetUrl, status: 'creating' })
+                            .select()
+                            .single();
+
+                        if (dbError) {
+                            res.statusCode = 500;
+                            res.setHeader('Content-Type', 'application/json');
+                            res.end(JSON.stringify({ error: 'DB error: ' + dbError.message }));
+                            return;
+                        }
+
+                        const agentPageUrl = `http://localhost:3000/meet-agent.html?sessionId=${session.id}`;
+                        console.log('[recall/launch] Agent page URL:', agentPageUrl);
+
+                        const recallResp = await fetch('https://ap-northeast-1.recall.ai/api/v1/bot/', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Token ${recallKey}`,
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                meeting_url: meetUrl,
+                                bot_name: 'Roxby',
+                                bot_image: 'https://newspotfunnel.com/logo.svg',
+                                output_media: {
+                                    camera: { kind: 'webpage', config: { url: agentPageUrl } },
+                                },
+                                variant: { google_meet: 'web_4_core' },
+                                recording_config: { include_bot_in_recording: { audio: true } },
+                            }),
+                        });
+
+                        const recallData = await recallResp.json();
+
+                        if (!recallResp.ok) {
+                            console.error('[recall/launch] Error:', recallData);
+                            res.statusCode = recallResp.status;
+                            res.setHeader('Content-Type', 'application/json');
+                            res.end(JSON.stringify({ error: recallData.detail || 'Bot creation failed' }));
+                            return;
+                        }
+
+                        await supabase.from('demo_sessions')
+                            .update({ bot_id: recallData.id, status: 'joining' })
+                            .eq('id', session.id);
+
+                        console.log('[recall/launch] Bot created:', recallData.id);
+                        res.statusCode = 200;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ success: true, botId: recallData.id, sessionId: session.id }));
+
+                    } catch (err) {
+                        console.error('[recall/launch] Error:', err);
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: err.message }));
+                    }
+                });
+
+                // GET /api/recall/status
+                server.middlewares.use('/api/recall/status', async (req, res) => {
+                    if (req.method !== 'GET') {
+                        res.statusCode = 405;
+                        res.end(JSON.stringify({ error: 'Method not allowed' }));
+                        return;
+                    }
+
+                    const recallKey = loadEnvVar('RECALL_API_KEY');
+                    if (!recallKey) {
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: 'RECALL_API_KEY not found' }));
+                        return;
+                    }
+
+                    const url = new URL(req.url, 'http://localhost');
+                    const botId = url.searchParams.get('botId');
+                    if (!botId) {
+                        res.statusCode = 400;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: 'Missing botId' }));
+                        return;
+                    }
+
+                    try {
+                        const resp = await fetch(`https://ap-northeast-1.recall.ai/api/v1/bot/${botId}/`, {
+                            headers: { 'Authorization': `Token ${recallKey}` },
+                        });
+                        const data = await resp.json();
+                        const latest = data.status_changes?.length > 0
+                            ? data.status_changes[data.status_changes.length - 1]
+                            : null;
+
+                        res.statusCode = 200;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({
+                            status: latest?.code || data.status || 'unknown',
+                            statusMessage: latest?.message || '',
+                        }));
+                    } catch (err) {
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: err.message }));
+                    }
+                });
+
+                // POST /api/recall/stop
+                server.middlewares.use('/api/recall/stop', async (req, res) => {
+                    if (req.method !== 'POST') {
+                        res.statusCode = 405;
+                        res.end(JSON.stringify({ error: 'Method not allowed' }));
+                        return;
+                    }
+
+                    const recallKey = loadEnvVar('RECALL_API_KEY');
+                    if (!recallKey) {
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: 'RECALL_API_KEY not found' }));
+                        return;
+                    }
+
+                    try {
+                        const body = await parseBody(req);
+                        const { botId } = body;
+
+                        if (!botId) {
+                            res.statusCode = 400;
+                            res.setHeader('Content-Type', 'application/json');
+                            res.end(JSON.stringify({ error: 'Missing botId' }));
+                            return;
+                        }
+
+                        await fetch(`https://ap-northeast-1.recall.ai/api/v1/bot/${botId}/leave_call/`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Token ${recallKey}` },
+                        });
+
+                        console.log('[recall/stop] Bot leaving:', botId);
+                        res.statusCode = 200;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ success: true }));
+                    } catch (err) {
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ error: err.message }));
                     }
                 });
             },
