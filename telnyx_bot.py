@@ -549,7 +549,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(
                     params=VADParams(
-                        threshold=0.5,       # Slightly more sensitive to catch all speech
+                        threshold=0.7,       # Higher threshold to filter coughs/sneezes
                         min_volume=0.3,      # Lower floor — 0.6 was cutting audio causing ticks
                         stop_secs=0.7,       # 700ms max latency as requested
                     )
