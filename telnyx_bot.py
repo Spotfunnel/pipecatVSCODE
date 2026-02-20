@@ -416,13 +416,13 @@ async def outbound_call(payload: OutboundCallPayload):
         public_url = os.getenv("BOT_PUBLIC_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "localhost")
         webhook_url = f"https://{public_url}/"
 
-        # Telnyx TeXML outbound call — when callee answers, Telnyx fetches webhook_url
-        # for TeXML instructions (our / endpoint returns <Stream> with Opus)
+        # Telnyx TeXML outbound call — when callee answers, Telnyx fetches
+        # TeXML from our / endpoint which returns <Stream> with Opus
         call_payload = {
             "to": payload.to,
             "from": from_number,
             "connection_id": os.getenv("TELNYX_TEXML_APP_ID", "2896638176531580022"),
-            "texml": f'<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Connect>\n    <Stream url="wss://{public_url}/ws" bidirectionalMode="rtp" bidirectionalCodec="OPUS" bidirectionalSamplingRate="16000"></Stream>\n  </Connect>\n  <Pause length="40"/>\n</Response>',
+            "url": webhook_url,
         }
 
         async with aiohttp.ClientSession() as session:
