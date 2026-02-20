@@ -352,6 +352,7 @@ class OutboundCallPayload(PydanticBaseModel):
     to: str  # Destination phone number in E.164 format
     from_number: Optional[str] = None  # Telnyx number to call from (uses first active agent's number if not provided)
 
+
 @app.on_event("startup")
 async def startup():
     """Initialize database connection pool on server start."""
@@ -455,6 +456,7 @@ async def outbound_call(payload: OutboundCallPayload):
     except Exception as e:
         logger.error(f"Outbound call failed: {e}", exc_info=True)
         return JSONResponse({'success': False, 'error': str(e)}, status_code=500)
+
 
 
 @app.post("/api/agent-config")
@@ -635,6 +637,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
         # Patch transport to handle Opus multi-message serialization
         patch_transport_for_opus(transport)
+
 
         # ── Load agent config from database by phone number ─────
         agent_config = await load_agent_by_phone(caller_to)
