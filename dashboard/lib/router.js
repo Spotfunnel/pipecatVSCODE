@@ -6,6 +6,7 @@ let currentCleanup = null;
 const NAV_ITEMS = [
     { path: '/', label: 'Agents' },
     { path: '/demo', label: 'Call Tester' },
+    { path: '/meet', label: 'Meet Demo' },
 ];
 
 export function registerRoute(path, handler) {

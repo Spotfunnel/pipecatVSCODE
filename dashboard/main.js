@@ -4,6 +4,7 @@ import { registerRoute, initRouter, navigate } from './lib/router.js';
 import { renderOnboarding } from './pages/onboarding.js';
 import { renderOverview } from './pages/overview.js';
 import { renderDemo } from './pages/demo.js';
+import { renderMeetDemo } from './pages/meet-demo.js';
 
 // Register routes
 registerRoute('/', (container) => {
@@ -16,6 +17,10 @@ registerRoute('/onboarding', (container) => {
 
 registerRoute('/demo', (container) => {
     renderDemo(container);
+});
+
+registerRoute('/meet', (container) => {
+    renderMeetDemo(container);
 });
 
 // Initialize

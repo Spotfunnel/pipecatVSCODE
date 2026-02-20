@@ -1,10 +1,16 @@
 // ── Demo Page — Outbound Call Tester ──────────────────────
 // Quick way to test Opus HD audio by having the bot call your phone.
+// Supports picking an existing agent or entering a custom prompt.
+
+import { getAllAgents, syncToServer } from '../lib/storage.js';
 
 const BOT_SERVER_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BOT_SERVER_URL)
     || 'https://api.newspotfunnel.com';
 
 export function renderDemo(container) {
+    const agents = getAllAgents();
+    const activeAgent = agents.find(a => a.active);
+
     container.innerHTML = `
         <div class="page-container" style="max-width: 640px;">
             <div class="page-header">
@@ -13,6 +19,34 @@ export function renderDemo(container) {
             </div>
 
             <div class="glass-card">
+                <div class="form-group">
+                    <label class="form-label">Agent</label>
+                    <select id="demo-agent" class="form-select">
+                        ${agents.map(a => `<option value="${a.id}" ${a.active ? 'selected' : ''}>${a.name}${a.active ? ' (active)' : ''}</option>`).join('')}
+                        <option value="__custom__">Custom prompt...</option>
+                    </select>
+                    <p class="form-hint">Select an agent or write a custom prompt for this call</p>
+                </div>
+
+                <div id="demo-custom-prompt-wrap" class="form-group" style="display: none;">
+                    <label class="form-label">Custom Prompt</label>
+                    <textarea
+                        id="demo-custom-prompt"
+                        class="form-textarea"
+                        rows="6"
+                        placeholder="You are a friendly AI assistant calling to confirm an appointment..."
+                    ></textarea>
+                </div>
+
+                <div id="demo-agent-preview" class="form-group" style="display: ${activeAgent ? 'block' : 'none'};">
+                    <div style="padding: var(--space-md); background: var(--bg-secondary); border-radius: var(--radius-md); border: 1px solid var(--border-default);">
+                        <div style="font-size: var(--font-xs); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-xs);">Agent Preview</div>
+                        <div id="demo-agent-name" style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">${activeAgent?.name || ''}</div>
+                        <div id="demo-agent-prompt" style="font-size: var(--font-sm); color: var(--text-secondary); max-height: 60px; overflow: hidden; text-overflow: ellipsis;">${activeAgent?.systemPrompt?.substring(0, 150) || ''}${(activeAgent?.systemPrompt?.length || 0) > 150 ? '...' : ''}</div>
+                        <div id="demo-agent-voice" style="font-size: var(--font-xs); color: var(--accent-blue); margin-top: var(--space-xs);">Voice: ${activeAgent?.phoneConfig?.voice || 'sage'}</div>
+                    </div>
+                </div>
+
                 <div class="form-group">
                     <label class="form-label">Phone Number</label>
                     <input
@@ -72,6 +106,13 @@ export function renderDemo(container) {
         </div>
     `;
 
+    const agentSelect = document.getElementById('demo-agent');
+    const customPromptWrap = document.getElementById('demo-custom-prompt-wrap');
+    const customPromptInput = document.getElementById('demo-custom-prompt');
+    const agentPreview = document.getElementById('demo-agent-preview');
+    const agentNameEl = document.getElementById('demo-agent-name');
+    const agentPromptEl = document.getElementById('demo-agent-prompt');
+    const agentVoiceEl = document.getElementById('demo-agent-voice');
     const phoneInput = document.getElementById('demo-phone');
     const fromInput = document.getElementById('demo-from');
     const callBtn = document.getElementById('demo-call-btn');
@@ -83,6 +124,31 @@ export function renderDemo(container) {
     if (savedPhone) phoneInput.value = savedPhone;
     const savedFrom = localStorage.getItem('demo_from');
     if (savedFrom) fromInput.value = savedFrom;
+    const savedCustomPrompt = localStorage.getItem('demo_custom_prompt');
+    if (savedCustomPrompt) customPromptInput.value = savedCustomPrompt;
+
+    // Agent selector change
+    agentSelect.addEventListener('change', () => {
+        const val = agentSelect.value;
+        if (val === '__custom__') {
+            customPromptWrap.style.display = 'block';
+            agentPreview.style.display = 'none';
+        } else {
+            customPromptWrap.style.display = 'none';
+            const agent = agents.find(a => a.id === val);
+            if (agent) {
+                agentPreview.style.display = 'block';
+                agentNameEl.textContent = agent.name;
+                const prompt = agent.systemPrompt || '';
+                agentPromptEl.textContent = prompt.substring(0, 150) + (prompt.length > 150 ? '...' : '');
+                agentVoiceEl.textContent = 'Voice: ' + (agent.phoneConfig?.voice || 'sage');
+                // Auto-fill from number if the agent has one
+                if (agent.phoneConfig?.phoneNumber && !fromInput.value.trim()) {
+                    fromInput.value = agent.phoneConfig.phoneNumber;
+                }
+            }
+        }
+    });
 
     callBtn.addEventListener('click', async () => {
         const phone = phoneInput.value.trim();
@@ -94,17 +160,48 @@ export function renderDemo(container) {
         // Save for next time
         localStorage.setItem('demo_phone', phone);
         if (fromInput.value.trim()) localStorage.setItem('demo_from', fromInput.value.trim());
+        if (customPromptInput.value.trim()) localStorage.setItem('demo_custom_prompt', customPromptInput.value.trim());
 
         callBtn.disabled = true;
         callBtn.textContent = 'Calling...';
         statusDiv.style.display = 'block';
         statusContent.innerHTML = `
             <div style="padding: var(--space-md); background: var(--bg-secondary); border-radius: var(--radius-md); border: 1px solid var(--border-default);">
-                <span style="color: var(--accent-amber);">Initiating call...</span>
+                <span style="color: var(--accent-amber);">Syncing agent config...</span>
             </div>
         `;
 
         try {
+            // If custom prompt, create a temporary agent config and sync it
+            const selectedVal = agentSelect.value;
+            if (selectedVal === '__custom__') {
+                const customPrompt = customPromptInput.value.trim() || 'You are a helpful AI assistant.';
+                await syncToServer({
+                    name: 'Call Tester (Custom)',
+                    systemPrompt: customPrompt,
+                    phoneConfig: {
+                        phoneNumber: fromInput.value.trim() || '',
+                        voice: 'sage',
+                        vadThreshold: 0.55,
+                        stopSecs: 0.7,
+                    },
+                    webhooks: [],
+                    active: true,
+                });
+            } else {
+                // Sync the selected agent so it's the one used for this call
+                const agent = agents.find(a => a.id === selectedVal);
+                if (agent) {
+                    await syncToServer(agent);
+                }
+            }
+
+            statusContent.innerHTML = `
+                <div style="padding: var(--space-md); background: var(--bg-secondary); border-radius: var(--radius-md); border: 1px solid var(--border-default);">
+                    <span style="color: var(--accent-amber);">Initiating call...</span>
+                </div>
+            `;
+
             const body = { to: phone };
             const from = fromInput.value.trim();
             if (from) body.from_number = from;
@@ -117,10 +214,12 @@ export function renderDemo(container) {
             const data = await resp.json();
 
             if (data.success) {
+                const agentLabel = selectedVal === '__custom__' ? 'Custom prompt' : (agents.find(a => a.id === selectedVal)?.name || 'Unknown');
                 statusContent.innerHTML = `
                     <div style="padding: var(--space-md); background: var(--accent-emerald-glow); border-radius: var(--radius-md); border: 1px solid rgba(16, 185, 129, 0.3);">
                         <div style="color: var(--accent-emerald); font-weight: 600; margin-bottom: var(--space-xs);">Call initiated</div>
                         <div style="font-size: var(--font-sm); color: var(--text-secondary);">
+                            Agent: ${agentLabel}<br/>
                             To: ${data.message || phone}<br/>
                             From: ${data.from || 'auto'}<br/>
                             Codec: ${data.codec || 'OPUS'}
