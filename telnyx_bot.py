@@ -348,6 +348,10 @@ class AgentConfigPayload(PydanticBaseModel):
     webhooks: Optional[List[Dict[str, Any]]] = []
     active: Optional[bool] = True
 
+class OutboundCallPayload(PydanticBaseModel):
+    to: str  # Destination phone number in E.164 format
+    from_number: Optional[str] = None  # Telnyx number to call from (uses first active agent's number if not provided)
+
 @app.on_event("startup")
 async def startup():
     """Initialize database connection pool on server start."""
@@ -377,6 +381,80 @@ async def health():
     except Exception:
         pass
     return {"status": "ok", "database": "connected" if db_ok else "disconnected"}
+
+
+@app.post("/api/outbound-call")
+async def outbound_call(payload: OutboundCallPayload):
+    """Initiate an outbound call via Telnyx TeXML.
+
+    When the callee picks up, Telnyx fetches our TeXML webhook (/) which
+    connects the call to our WebSocket pipeline with Opus HD audio.
+    """
+    try:
+        api_key = os.getenv("TELNYX_API_KEY")
+        if not api_key:
+            return JSONResponse({'success': False, 'error': 'TELNYX_API_KEY not set'}, status_code=500)
+
+        # Determine the "from" number
+        from_number = payload.from_number
+        if not from_number:
+            # Use the first active agent's phone number from the database
+            try:
+                agents = await load_all_agents()
+                active = next((a for a in agents if a.get('active') and a.get('phoneNumber')), None)
+                if active:
+                    from_number = active['phoneNumber']
+            except Exception:
+                pass
+
+        if not from_number:
+            return JSONResponse(
+                {'success': False, 'error': 'No from_number provided and no agent has a phone number configured'},
+                status_code=400,
+            )
+
+        public_url = os.getenv("BOT_PUBLIC_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "localhost")
+        webhook_url = f"https://{public_url}/"
+
+        # Telnyx TeXML outbound call — when callee answers, Telnyx fetches webhook_url
+        # for TeXML instructions (our / endpoint returns <Stream> with Opus)
+        call_payload = {
+            "to": payload.to,
+            "from": from_number,
+            "connection_id": os.getenv("TELNYX_TEXML_APP_ID", "2896638176531580022"),
+            "texml": f'<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Connect>\n    <Stream url="wss://{public_url}/ws" bidirectionalMode="rtp" bidirectionalCodec="OPUS" bidirectionalSamplingRate="16000"></Stream>\n  </Connect>\n  <Pause length="40"/>\n</Response>',
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.telnyx.com/v2/texml/calls",
+                json=call_payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                status = resp.status
+                body = await resp.json()
+                logger.info(f"Outbound call API → HTTP {status}: {json.dumps(body)[:500]}")
+
+                if 200 <= status < 300:
+                    call_sid = body.get("data", {}).get("sid", "unknown")
+                    return JSONResponse({
+                        'success': True,
+                        'message': f'Outbound call initiated to {payload.to}',
+                        'call_sid': call_sid,
+                        'from': from_number,
+                        'codec': 'OPUS',
+                    })
+                else:
+                    error_msg = body.get("errors", [{}])[0].get("detail", str(body))
+                    return JSONResponse({'success': False, 'error': error_msg}, status_code=status)
+
+    except Exception as e:
+        logger.error(f"Outbound call failed: {e}", exc_info=True)
+        return JSONResponse({'success': False, 'error': str(e)}, status_code=500)
 
 
 @app.post("/api/agent-config")
