@@ -9,5 +9,8 @@ aiohttp>=3.9.0,<4.0
 # Database (Supabase Postgres)
 asyncpg>=0.29.0
 
+# HD Audio (Opus codec)
+opuslib>=3.0.1
+
 # Environment
 python-dotenv==1.0.1

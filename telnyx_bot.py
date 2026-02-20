@@ -24,9 +24,9 @@ from pipecat.processors.aggregators.llm_response_universal import LLMContextAggr
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.services.openai.realtime.events import SessionProperties
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport, FastAPIWebsocketParams
-from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.utils import parse_telephony_websocket
+from serializers.opus_telnyx import OpusTelnyxSerializer, patch_transport_for_opus
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -483,8 +483,8 @@ async def handle_inbound_call(request: Request):
     public_url = os.getenv("BOT_PUBLIC_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "localhost")
     ws_url = f"wss://{public_url}/ws"
     
-    # TeXML response: Connect to our WebSocket with bidirectional PCMU audio
-    texml = f'<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Connect>\n    <Stream url="{ws_url}" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000"></Stream>\n  </Connect>\n  <Pause length="40"/>\n</Response>'
+    # TeXML response: Connect to our WebSocket with bidirectional Opus HD audio
+    texml = f'<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Connect>\n    <Stream url="{ws_url}" bidirectionalMode="rtp" bidirectionalCodec="OPUS" bidirectionalSamplingRate="16000"></Stream>\n  </Connect>\n  <Pause length="40"/>\n</Response>'
     
     logger.info(f"Responding with TeXML: {texml}")
     return HTMLResponse(content=texml, media_type="application/xml")
@@ -519,18 +519,22 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"  Encoding: {outbound_encoding}")
         logger.info(f"  From: {caller_from} -> To: {caller_to}")
         
-        # TelnyxFrameSerializer only supports PCMU/PCMA decoding.
-        if outbound_encoding not in ("PCMU", "PCMA"):
-            logger.warning(f"Telnyx negotiated {outbound_encoding} but serializer only supports PCMU/PCMA. Forcing PCMU.")
-            outbound_encoding = "PCMU"
-        
-        # PCMU encoding — the only encoding TelnyxFrameSerializer reliably supports
-        serializer = TelnyxFrameSerializer(
+        # Use Opus HD audio (16kHz) — falls back to PCMU if Telnyx negotiates differently
+        codec = outbound_encoding if outbound_encoding in ("OPUS", "L16", "PCMU", "PCMA") else "OPUS"
+        telnyx_rate = 16000 if codec in ("OPUS", "L16") else 8000
+        logger.info(f"Using codec: {codec} at {telnyx_rate}Hz")
+
+        serializer = OpusTelnyxSerializer(
             stream_id=stream_id,
             call_control_id=call_control_id,
-            outbound_encoding="PCMU",
-            inbound_encoding="PCMU",
+            outbound_encoding=codec,
+            inbound_encoding=codec,
             api_key=os.getenv("TELNYX_API_KEY"),
+            params=OpusTelnyxSerializer.InputParams(
+                telnyx_sample_rate=telnyx_rate,
+                inbound_encoding=codec,
+                outbound_encoding=codec,
+            ),
         )
         
         transport = FastAPIWebsocketTransport(
@@ -550,6 +554,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 serializer=serializer,
             )
         )
+
+        # Patch transport to handle Opus multi-message serialization
+        patch_transport_for_opus(transport)
 
         # ── Load agent config from database by phone number ─────
         agent_config = await load_agent_by_phone(caller_to)
